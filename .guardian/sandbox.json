@@ -3,57 +3,9 @@
   "rights": [
     {
       "kind": "filesystem",
-      "access": "read",
-      "path": "~/Projects/personal/pi",
-      "scope": "tree"
-    },
-    {
-      "kind": "filesystem",
       "access": "write",
       "path": ".git",
       "scope": "tree"
-    },
-    {
-      "kind": "filesystem",
-      "access": "write",
-      "path": "~/Projects/personal/pi/.git",
-      "scope": "tree"
-    },
-    {
-      "kind": "filesystem",
-      "access": "write",
-      "path": "~/Projects/personal/pi/apps/pi-terminal/test/project-trust-resources.test.ts",
-      "scope": "file"
-    },
-    {
-      "kind": "filesystem",
-      "access": "write",
-      "path": "~/Projects/personal/pi/flake.lock",
-      "scope": "file"
-    },
-    {
-      "kind": "filesystem",
-      "access": "write",
-      "path": "~/Projects/personal/pi/flake.nix",
-      "scope": "file"
-    },
-    {
-      "kind": "filesystem",
-      "access": "write",
-      "path": "~/Projects/personal/pi/nix/pi-agent.nix",
-      "scope": "file"
-    },
-    {
-      "kind": "filesystem",
-      "access": "write",
-      "path": "~/Projects/personal/pi/nix/pi-terminal.nix",
-      "scope": "file"
-    },
-    {
-      "kind": "filesystem",
-      "access": "write",
-      "path": "~/Projects/personal/pi/README.md",
-      "scope": "file"
     },
     {
       "kind": "network_host",
