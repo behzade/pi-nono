@@ -3,6 +3,7 @@
 pi-nono is a sandbox and permission system for the [Pi coding agent](https://pi.dev), powered by [nono](https://github.com/nolabs-ai/nono).
 It gives Pi workspace access by default and asks for approval when a task needs
 access to another file, service, or local port.
+Unlike command-based sandboxes that allow or deny volatile scripts, pi-nono enforces permissions at stable I/O boundaries: files, network services, and local ports.
 
 > **Alpha:** pi-nono uses nono, which is still alpha upstream.
 
