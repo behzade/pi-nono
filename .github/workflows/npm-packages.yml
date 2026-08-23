@@ -2,6 +2,9 @@ name: npm packages
 
 on:
   workflow_dispatch:
+  push:
+    tags:
+      - "v*"
   pull_request:
     paths:
       - ".github/workflows/npm-packages.yml"
@@ -19,6 +22,11 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22.19.0
+      - name: Verify release tag matches package version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version=$(node -p "require('./extensions/sandbox/package.json').version")
+          test "$GITHUB_REF_NAME" = "v$version"
       - run: |
           node packaging/npm/build-packages.mjs main --out "$PWD/dist/npm"
           mkdir -p dist/tarballs
@@ -66,7 +74,7 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: guardian-darwin-arm64-npm
-          path: dist/tarballs/*.tgz
+          path: dist/tarballs/pi-extension-sandbox-darwin-arm64-*.tgz
 
   linux-x64:
     runs-on: ubuntu-latest
@@ -105,4 +113,25 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: guardian-linux-x64-npm
-          path: dist/tarballs/*.tgz
+          path: dist/tarballs/pi-extension-sandbox-linux-x64-*.tgz
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [main, darwin-arm64, linux-x64]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: guardian-*-npm
+          path: release-assets
+          merge-multiple: true
+      - name: Create prerelease
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME" release-assets/*.tgz
+          --verify-tag --generate-notes --prerelease
+          --title "Guardian $GITHUB_REF_NAME"

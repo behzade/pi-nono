@@ -40,8 +40,11 @@ Guardian's nixpkgs revision. Linux hosts must install Bubblewrap through their
 OS package manager. Review upstream security and release notes before changing
 nono.
 
-Pack both native packages first and the main package last. Test installation with
-`npm install --ignore-scripts` and publish initially with the `next` dist-tag.
-Publishing is deliberately not automated: reserve all three npm names and review
-the generated package manifests, checksums, licenses, and platform test results
-before running `npm publish`.
+A `v*` Git tag runs all three package jobs and creates a prerelease GitHub
+release containing the main and native tarballs. The tag must match the package
+version exactly, for example `v3.0.0` for package version `3.0.0`.
+
+npm publishing remains deliberately manual. Reserve all three package names,
+review the generated manifests, checksums, licenses, and platform results, test
+installation with `npm install --ignore-scripts`, publish both native packages
+first, and publish the main package last with the `next` dist-tag.

@@ -1,34 +1,41 @@
 # Pi Guardian
 
-Fail-closed native command sandbox and explicit access policy for the Pi coding agent.
-Guardian uses nono for OS sandboxing and network enforcement. On Linux it adds a
-Bubblewrap mount layer for deny-over-allow filesystem rules.
+Fail-closed native command sandbox and explicit access policy for the Pi coding
+agent. Guardian uses nono for filesystem and network enforcement and adds a
+Linux Bubblewrap layer for deny-over-allow rules.
 
-> **Alpha:** nono's upstream security policy says its guarantees are not stable
-> and production use is not recommended before its 1.0 security work. Review the
-> Guardian and nono threat models before relying on this package.
+> **Alpha:** nono's security guarantees are not stable and upstream does not
+> recommend production use before its 1.0 security work. Guardian should be
+> treated as alpha too.
 
 ## Install
 
+After the npm packages are published under the `next` dist-tag:
+
 ```sh
-pi install npm:pi-extension-sandbox@3.0.0
+pi install npm:pi-extension-sandbox@next
 ```
 
-The npm release supports:
+Supported npm targets:
 
 - macOS on Apple Silicon;
-- Linux x86-64 with unprivileged user namespaces enabled and OS-provided
-  Bubblewrap available as `bwrap` on `PATH`.
+- Linux x86-64 with unprivileged user namespaces and OS-provided `bwrap` on
+  `PATH`.
 
-Guardian installs no lifecycle scripts and never resolves nono through `PATH`.
-The main package selects an exact-version native npm package. Linux startup
-fails closed when `bwrap` is unavailable on `PATH`.
+Guardian has no lifecycle scripts and never resolves nono through `PATH`. The
+main package selects an exact-version native package. Linux startup fails closed
+when Bubblewrap is unavailable.
 
-For Nix installations, use the repository's flake package instead. It keeps the
-same policy adapter while substituting a fixed Nix-store nono executable and
-using the same OS-provided Bubblewrap lookup.
+Tagged releases also provide reviewed npm tarballs on GitHub. Nix users can use
+the repository flake, which substitutes a fixed Nix-store nono executable.
 
-## Policy and checks
+## Scope
+
+Guardian covers Pi's built-in file tools, shell commands, and Guardian
+background jobs. It assumes the host, Pi process, installed extensions, nono,
+and system Bubblewrap are trusted. It does not claim to contain a compromised
+host or a malicious in-process extension.
 
 See the [repository README](https://github.com/behzade/pi-guardian#readme) for
-policy paths, rights, enforcement details, and development checks.
+the trust boundary, policy schema, approval lifetime, enforcement details, and
+development checks.

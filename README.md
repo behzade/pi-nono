@@ -1,96 +1,80 @@
 # Guardian
 
-Guardian is a Pi policy adapter backed by [nono](https://github.com/nolabs-ai/nono).
-It keeps explicit project approvals and exact filesystem/network rights while
-nono applies the OS sandbox:
+Guardian is a sandbox and permission system for the [Pi coding agent](https://pi.dev), powered by [nono](https://github.com/nolabs-ai/nono).
+It gives Pi workspace access by default and asks for approval when a task needs
+access to another file, service, or local port.
 
-- Linux: Landlock, nono's supervised network proxy, and a Bubblewrap mount
-  layer only for deny-over-allow rules Landlock cannot represent;
-- macOS: Seatbelt and nono's supervised network proxy.
+> **Alpha:** Guardian uses nono, which is still alpha upstream.
 
-The previous custom broker and root filesystem scanner are no longer packaged
-or used.
+## Default permissions
 
-## Distribution
+| Resource | Default access |
+| --- | --- |
+| Workspace | Read and write |
+| System temporary directories | Read and write |
+| `~/.cache/pi-sandbox` | Read and write |
+| Workspace Git metadata | Read; write with explicit `.git` approval |
+| Remote hosts | Explicit host approval |
+| Loopback services | Explicit host and port approval |
 
-The flake package carries a fixed Nix-store nono executable. npm releases use one
-TypeScript package plus an exact-version nono package for macOS ARM64 or Linux
-x86-64; they have no install scripts and never resolve nono through `PATH`.
-Linux npm installations require OS-provided Bubblewrap on `PATH` and fail closed
-at startup when it is missing. See [`packaging/npm`](packaging/npm/README.md) for
-the reviewed build and release gate.
+Guardian redirects common package-manager caches into
+`~/.cache/pi-sandbox`. Credentials, authentication files, `.env` files, private
+keys, and Guardian/Pi/Codex control paths remain protected.
 
-nono remains alpha upstream and its security policy does not recommend production
-use before 1.0. Guardian npm releases must therefore use the `next` dist-tag while
-that condition remains.
+The policy covers Pi's built-in file tools, shell commands, and Guardian
+background jobs.
 
-## Policy
+## Install
 
-Machine policy is read from `~/.config/guardian/sandbox.json`. The Pi adapter
-uses the legacy `~/.pi/agent/extensions/sandbox.json` only when the neutral path
-is absent. Portable, user-approved project rights are stored in:
+npm packages support macOS on Apple Silicon and Linux x86-64. Linux requires
+unprivileged user namespaces and `bwrap` from the system package manager.
 
-```text
-.guardian/sandbox.json
+```sh
+pi install npm:pi-extension-sandbox@next
 ```
 
-Rights approved only for one persisted Pi session are stored outside the
-project and bound to both its session ID and exact session file:
+Nix users can use the repository flake. Tagged releases also include the main
+package and platform-specific npm tarballs.
 
-```text
-~/.config/guardian/session-rights/<session-id-hash>.json
-```
+## Permissions
 
-They survive restart and resume, but are not inherited by new, forked, or
-cloned sessions. Ephemeral Pi sessions keep session rights only in memory.
-The user chooses session or project scope in the approval prompt. Absolute paths
-outside the project and home directory are host-specific, so Guardian offers
-only session scope for them; they are never written to checked-in project policy.
+When a task needs more access, Guardian shows the exact capability and lets the
+user approve it for the current Pi session or the project.
 
-The adapter reads the legacy `.pi/extensions/sandbox/sandbox.json` only when the
-new policy is absent; the next approved update writes `.guardian/sandbox.json`.
+Supported capabilities are:
 
-Project rights retain the version 1 schema:
+- file or directory `read` and `write` access;
+- outbound access to an exact hostname;
+- access to an exact loopback host and port;
+- managed development-cache mappings.
 
-- exact file or tree `read`/`write` rights;
-- exact `network_host` rights;
-- exact loopback `network_endpoint` host/port rights;
-- managed development-cache environment mappings.
+| Policy | Path | Scope |
+| --- | --- | --- |
+| Machine | `~/.config/guardian/sandbox.json` | All Guardian projects |
+| Project | `.guardian/sandbox.json` | Current trusted project |
+| Session | `~/.config/guardian/session-rights/<session-id-hash>.json` | Current Pi session |
 
-Each agent synchronizes the checked-in project policy and its bound session
-policy before starting a command, then gives that command one immutable policy
-snapshot. Policy changes never retry a command automatically. Guardian's
-user-level `~/.config/guardian` control directory cannot be granted to
-sandboxed commands; project-local `.guardian` remains the project policy root.
+Session permissions are bound to the exact Pi session and persist when that
+session is resumed.
 
-## Enforcement
+## How it works
 
-Each foreground command and background job receives an ephemeral, strictly
-generated nono profile extending nono's built-in `default` profile. Guardian
-maps:
+Guardian builds an immutable nono profile from the active machine, project, and
+session policy for each command. Background jobs keep the policy captured when
+they start.
 
-- read trees/files to nono read capabilities;
-- write trees/files to nono read-write capabilities;
-- exact hosts to nono proxy allow entries;
-- each approved loopback `network_endpoint` to its exact nono `open_port` entry
-  on Linux and macOS.
+- **Linux:** Landlock and nono enforce filesystem and network access. Bubblewrap
+  applies protected subpaths inside writable directories.
+- **macOS:** Seatbelt and nono enforce filesystem and network access.
 
-Linux Landlock is additive and cannot subtract `.env`, key, or control paths
-from an allowed workspace. Guardian therefore expands only deny globs beneath
-their static non-root directories and mounts existing denied paths inaccessible
-or read-only before launching nono. It does not scan `/` or follow directory
-symlinks. Nono still owns all grants and network enforcement.
+The Nix package uses a fixed Nix-store nono executable. npm releases select an
+exact-version native nono package for the current platform.
 
-Nix installations use fixed nono, while npm installations use fixed packaged
-nono. Both resolve OS-provided Bubblewrap through `PATH` on Linux.
-
-## Checks
+## Development
 
 ```bash
 npm run check --prefix extensions/sandbox
 git diff --check
 ```
 
-nono is currently alpha upstream. The flake's nixpkgs revision fixes the nono
-version used by Guardian; update it only after reviewing upstream security and
-release notes.
+Release packaging is documented in [`packaging/npm`](packaging/npm/README.md).
