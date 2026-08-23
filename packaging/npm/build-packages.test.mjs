@@ -16,15 +16,16 @@ test("stages a publishable main package with exact optional native packages", ()
 			{ encoding: "utf8" },
 		);
 		assert.equal(result.status, 0, result.stderr);
-		const packageRoot = join(outputRoot, "pi-extension-sandbox");
+		const packageRoot = join(outputRoot, "pi-guardian");
 		const manifest = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
 		assert.equal(manifest.private, false);
 		assert.deepEqual(manifest.scripts, {});
 		assert.equal(manifest.devDependencies, undefined);
 		assert.deepEqual(manifest.optionalDependencies, {
-			"pi-extension-sandbox-darwin-arm64": "3.0.0",
-			"pi-extension-sandbox-linux-x64": "3.0.0",
+			"pi-guardian-darwin-arm64": "3.0.0",
+			"pi-guardian-linux-x64": "3.0.0",
 		});
+		assert.deepEqual(manifest.publishConfig, { access: "public", tag: "next" });
 		const names = readdirSync(packageRoot);
 		assert(names.includes("README.md"));
 		assert(names.includes("LICENSE"));

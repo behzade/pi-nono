@@ -14,7 +14,7 @@ let
   };
 in
 stdenvNoCC.mkDerivation {
-  pname = "pi-sandbox-extension";
+  pname = "pi-guardian";
   version = "3.0.0";
 
   src = source;

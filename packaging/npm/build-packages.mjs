@@ -21,13 +21,13 @@ const sourceRoot = join(repositoryRoot, "extensions", "sandbox");
 const sourceManifest = JSON.parse(readFileSync(join(sourceRoot, "package.json"), "utf8"));
 const nativePackages = {
 	"darwin:arm64": {
-		name: "pi-extension-sandbox-darwin-arm64",
+		name: "pi-guardian-darwin-arm64",
 		os: "darwin",
 		cpu: "arm64",
 		format: "mach-o-arm64",
 	},
 	"linux:x64": {
-		name: "pi-extension-sandbox-linux-x64",
+		name: "pi-guardian-linux-x64",
 		os: "linux",
 		cpu: "x64",
 		format: "elf-x64",
@@ -89,6 +89,7 @@ function buildNative(options) {
 		cpu: [selected.cpu],
 		...(selected.os === "linux" ? { libc: ["glibc"] } : {}),
 		files: ["bin", "LICENSES", "README.md"],
+		publishConfig: { access: "public", tag: "next" },
 		scripts: {},
 		guardian: {
 			nono: { version: "0.61.1", sha256: nono.sha256, path: "bin/nono" },

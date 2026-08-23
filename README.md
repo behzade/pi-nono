@@ -30,7 +30,7 @@ npm packages support macOS on Apple Silicon and Linux x86-64. Linux requires
 unprivileged user namespaces and `bwrap` from the system package manager.
 
 ```sh
-pi install npm:pi-extension-sandbox@next
+pi install npm:pi-guardian@next
 ```
 
 Nix users can use the repository flake. Tagged releases also include the main

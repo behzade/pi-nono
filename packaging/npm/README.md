@@ -8,8 +8,8 @@ Supported targets:
 
 | Package | Native contents |
 | --- | --- |
-| `pi-extension-sandbox-darwin-arm64` | nono 0.61.1 |
-| `pi-extension-sandbox-linux-x64` | nono 0.61.1 |
+| `pi-guardian-darwin-arm64` | nono 0.61.1 |
+| `pi-guardian-linux-x64` | nono 0.61.1 |
 
 The build accepts only explicit absolute input paths. It checks nono's version,
 architecture, checksum, and runtime linkage, and rejects symlinks and Nix-store

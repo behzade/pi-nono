@@ -13,11 +13,11 @@ interface NativePackage {
 
 const NATIVE_PACKAGES: Record<string, NativePackage> = {
 	"darwin:arm64": {
-		name: "pi-extension-sandbox-darwin-arm64",
+		name: "pi-guardian-darwin-arm64",
 		nonoPath: "bin/nono",
 	},
 	"linux:x64": {
-		name: "pi-extension-sandbox-linux-x64",
+		name: "pi-guardian-linux-x64",
 		nonoPath: "bin/nono",
 	},
 };

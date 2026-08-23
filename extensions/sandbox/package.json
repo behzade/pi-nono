@@ -1,10 +1,14 @@
 {
-	"name": "pi-extension-sandbox",
+	"name": "pi-guardian",
 	"private": true,
 	"version": "3.0.0",
 	"description": "Fail-closed native sandbox and approval policy for the Pi coding agent",
 	"type": "module",
 	"license": "MIT",
+	"publishConfig": {
+		"access": "public",
+		"tag": "next"
+	},
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/behzade/pi-guardian.git",

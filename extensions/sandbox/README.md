@@ -13,7 +13,7 @@ Linux Bubblewrap layer for deny-over-allow rules.
 After the npm packages are published under the `next` dist-tag:
 
 ```sh
-pi install npm:pi-extension-sandbox@next
+pi install npm:pi-guardian@next
 ```
 
 Supported npm targets:
