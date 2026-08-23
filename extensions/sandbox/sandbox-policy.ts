@@ -22,6 +22,7 @@ import {
 const OUTPUT_LIMIT_BYTES = 10 * 1024 * 1024;
 
 export type NativeFilePermission = IoPermission;
+export type SandboxSourceEnvironment = Readonly<NodeJS.ProcessEnv>;
 
 export function buildSandboxExecRequest(
 	id: string,
@@ -31,7 +32,8 @@ export function buildSandboxExecRequest(
 	config: NativeSandboxConfig,
 	permissions: readonly NativeFilePermission[],
 	networkHosts: readonly string[],
-	localPorts: readonly number[] = [],
+	localPorts: readonly number[],
+	sourceEnvironment: SandboxSourceEnvironment,
 ): SandboxExecRequest {
 	const effective = mergeGlobalConfig(DEFAULT_CONFIG, config);
 	if (localPorts.some((port) => !Number.isInteger(port) || port < 1 || port > 65_535)) {
@@ -51,10 +53,10 @@ export function buildSandboxExecRequest(
 	return {
 		type: "exec",
 		id,
-		command: { program: hostBash(), args: ["-c", command] },
+		command: { program: hostBash(sourceEnvironment), args: ["-c", command] },
 		cwd: actualCwd,
 		env: {
-			...buildShellEnvironment(effective),
+			...buildShellEnvironment(effective, sourceEnvironment),
 			IN_SANDBOX: "1",
 			PI_SANDBOX: "nono",
 		},
@@ -82,8 +84,8 @@ export function buildSandboxExecRequest(
 	};
 }
 
-function hostBash(): string {
-	for (const directory of (process.env.PATH ?? "").split(delimiter)) {
+function hostBash(sourceEnvironment: SandboxSourceEnvironment): string {
+	for (const directory of (sourceEnvironment.PATH ?? "").split(delimiter)) {
 		if (!directory) continue;
 		const candidate = join(directory, "bash");
 		try {

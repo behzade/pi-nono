@@ -1,7 +1,11 @@
 import { Cause, Deferred, Effect, Exit, Fiber, Schema, Scope } from "effect";
 import type { SandboxExecResult } from "./sandbox-protocol.ts";
 import { NonoClient } from "./nono-client.ts";
-import { buildSandboxExecRequest, type NativeFilePermission } from "./sandbox-policy.ts";
+import {
+	buildSandboxExecRequest,
+	type NativeFilePermission,
+	type SandboxSourceEnvironment,
+} from "./sandbox-policy.ts";
 import { formatDenialSummary } from "./denial-summary.ts";
 import type { NativeSandboxConfig } from "./sandbox-config.ts";
 
@@ -50,6 +54,7 @@ interface StartOptions {
 export class NativeBackgroundJobs {
 	readonly #nonoPath: string;
 	readonly #bwrapPath: string;
+	readonly #sourceEnvironment: SandboxSourceEnvironment;
 	readonly #jobs = new Map<string, NativeJob>();
 	readonly #scope = Scope.makeUnsafe();
 	readonly #onSettled: (settlement: BackgroundJobSettlement) => void;
@@ -58,10 +63,12 @@ export class NativeBackgroundJobs {
 	constructor(
 		nonoPath: string,
 		bwrapPath: string,
+		sourceEnvironment: SandboxSourceEnvironment,
 		onSettled: (settlement: BackgroundJobSettlement) => void = () => {},
 	) {
 		this.#nonoPath = nonoPath;
 		this.#bwrapPath = bwrapPath;
+		this.#sourceEnvironment = sourceEnvironment;
 		this.#onSettled = onSettled;
 	}
 
@@ -85,6 +92,7 @@ export class NativeBackgroundJobs {
 				options.revalidatePermissions?.() ?? options.permissions,
 				options.networkHosts,
 				options.localPorts,
+				manager.#sourceEnvironment,
 			),
 			catch: jobError,
 		});

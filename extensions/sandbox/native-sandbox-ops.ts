@@ -8,6 +8,7 @@ import type { NativeSandboxConfig } from "./sandbox-config.ts";
 import {
 	buildSandboxExecRequest,
 	type NativeFilePermission,
+	type SandboxSourceEnvironment,
 } from "./sandbox-policy.ts";
 import { formatDenialSummary } from "./denial-summary.ts";
 
@@ -44,6 +45,7 @@ export const executeNativeSandboxCommand = Effect.fn("Sandbox.executeNativeComma
 		networkHosts: readonly string[];
 		localPorts: readonly number[];
 		commandId: string;
+		sourceEnvironment: SandboxSourceEnvironment;
 		revalidatePermissions?: () => readonly NativeFilePermission[];
 		command: string;
 		cwd: string;
@@ -61,6 +63,7 @@ export const executeNativeSandboxCommand = Effect.fn("Sandbox.executeNativeComma
 				params.revalidatePermissions?.() ?? params.permissions,
 				params.networkHosts,
 				params.localPorts,
+				params.sourceEnvironment,
 			),
 			catch: sandboxError,
 		});
@@ -78,6 +81,11 @@ export const executeNativeSandboxCommand = Effect.fn("Sandbox.executeNativeComma
 	},
 );
 
+interface NativeSandboxOpsOptions {
+	sourceEnvironment: SandboxSourceEnvironment;
+	revalidatePermissions?: () => readonly NativeFilePermission[];
+}
+
 /** Executes exactly once. Access changes are separate request_access tool calls. */
 export function createNativeSandboxOps(
 	client: SandboxExecutor,
@@ -86,7 +94,7 @@ export function createNativeSandboxOps(
 	networkHosts: readonly string[],
 	localPorts: readonly number[],
 	commandId: string,
-	revalidatePermissions?: () => readonly NativeFilePermission[],
+	options: NativeSandboxOpsOptions,
 ): BashOperations {
 	return {
 		exec(command, cwd, { onData, signal, timeout }) {
@@ -97,7 +105,8 @@ export function createNativeSandboxOps(
 				networkHosts,
 				localPorts,
 				commandId,
-				revalidatePermissions,
+				sourceEnvironment: options.sourceEnvironment,
+				revalidatePermissions: options.revalidatePermissions,
 				command,
 				cwd,
 				onData,

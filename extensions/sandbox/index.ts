@@ -48,6 +48,7 @@ import {
 	isDeniedByConfig,
 } from "./io-policy.ts";
 import { createNativeSandboxOps } from "./native-sandbox-ops.ts";
+import type { SandboxSourceEnvironment } from "./sandbox-policy.ts";
 import { runtimeNetworkHosts } from "./network-policy.ts";
 import {
 	registerApprovalSession,
@@ -87,7 +88,12 @@ function unavailableBashOps(reason: string): BashOperations {
 type SandboxState =
 	| { kind: "disabled"; reason: string }
 	| { kind: "initializing" }
-	| { kind: "ready"; config: NativeSandboxConfig; machineConfig: NativeSandboxConfig }
+	| {
+			kind: "ready";
+			config: NativeSandboxConfig;
+			machineConfig: NativeSandboxConfig;
+			environment: SandboxSourceEnvironment;
+	  }
 	| { kind: "failed"; reason: string };
 
 export default function (pi: ExtensionAPI) {
@@ -193,7 +199,10 @@ export default function (pi: ExtensionAPI) {
 				networkHosts(policyAtStart),
 				policyAtStart.localPorts,
 				id,
-				() => activeAccess().revalidate(policyAtStart).filesystem,
+				{
+					sourceEnvironment: requireReadyState(sandboxState).environment,
+					revalidatePermissions: () => activeAccess().revalidate(policyAtStart).filesystem,
+				},
 			);
 			return createBashTool(localCwd, { operations }).execute(id, params, signal, onUpdate);
 		},
@@ -258,7 +267,10 @@ export default function (pi: ExtensionAPI) {
 						networkHosts(policyAtStart),
 						policyAtStart.localPorts,
 						`user-bash-${++userBashCounter}-${randomUUID()}`,
-						() => activeAccess().revalidate(policyAtStart).filesystem,
+						{
+							sourceEnvironment: requireReadyState(sandboxState).environment,
+							revalidatePermissions: () => activeAccess().revalidate(policyAtStart).filesystem,
+						},
 					),
 				};
 			} catch (error) {
@@ -270,6 +282,7 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		const generation = ++sessionGeneration;
+		const sessionEnvironment: SandboxSourceEnvironment = Object.freeze({ ...process.env });
 		if (approvalContext) unregisterApprovalSession(approvalContext);
 		approvalContext = ctx;
 		registerApprovalSession(ctx);
@@ -304,11 +317,17 @@ export default function (pi: ExtensionAPI) {
 			backgroundJobs = new NativeBackgroundJobs(
 				nonoPath,
 				packagedExecutables.bwrapPath,
+				sessionEnvironment,
 				(settlement) => {
 					if (generation === sessionGeneration) notifyBackgroundJobSettlement(pi, settlement);
 				},
 			);
-			sandboxState = { kind: "ready", config: accessPolicy.effective.config, machineConfig };
+			sandboxState = {
+				kind: "ready",
+				config: accessPolicy.effective.config,
+				machineConfig,
+				environment: sessionEnvironment,
+			};
 			const backendLabel = `nono ${process.platform === "linux" ? "Landlock" : "Seatbelt"}`;
 			ctx.ui.setStatus("sandbox", ctx.ui.theme.fg("accent", `🔒 ${backendLabel}`));
 		} catch (error) {

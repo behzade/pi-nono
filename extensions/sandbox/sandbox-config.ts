@@ -470,7 +470,7 @@ function matchesAny(name: string, patterns: readonly string[]): boolean {
 
 export function buildShellEnvironment(
 	config: NativeSandboxConfig,
-	source: NodeJS.ProcessEnv = process.env,
+	source: Readonly<NodeJS.ProcessEnv>,
 ): Record<string, string> {
 	const effectiveConfig = mergeGlobalConfig(DEFAULT_CONFIG, config);
 	const policy = effectiveConfig.shellEnvironment ?? {};

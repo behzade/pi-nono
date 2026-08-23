@@ -21,6 +21,39 @@ class FakeSandboxExecutor implements SandboxExecutor {
 	}
 }
 
+const environmentOptions = { sourceEnvironment: process.env };
+function sandboxOps(
+	executor: SandboxExecutor,
+	commandId: string,
+	revalidatePermissions?: () => never,
+) {
+	return createNativeSandboxOps(executor, DEFAULT_CONFIG, [], [], [], commandId, {
+		...environmentOptions,
+		revalidatePermissions,
+	});
+}
+
+test("sandbox commands use the supplied captured environment", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-captured-environment-"));
+	const executor = new FakeSandboxExecutor({ exitCode: 0, denials: [], denialsComplete: true });
+	const capturedEnvironment = Object.freeze({
+		...process.env,
+		PATH: "/captured/bun/bin:/captured/system/bin",
+	});
+	const operations = createNativeSandboxOps(
+		executor,
+		DEFAULT_CONFIG,
+		[],
+		[],
+		[],
+		"captured-environment",
+		{ sourceEnvironment: capturedEnvironment },
+	);
+	await operations.exec("bun --version", cwd, { onData() {} });
+
+	assert.equal(executor.requests[0]?.env.PATH, capturedEnvironment.PATH);
+});
+
 test("one failed command makes exactly one executor request and returns a bounded grouped denial", async () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pi-one-run-denial-"));
 	const paths = Array.from({ length: 20 }, (_, index) => `/external/state/file-${index}.db`);
@@ -30,7 +63,7 @@ test("one failed command makes exactly one executor request and returns a bounde
 		denialsComplete: false,
 	});
 	const output: Buffer[] = [];
-	const operations = createNativeSandboxOps(executor, DEFAULT_CONFIG, [], [], [], "tool-one-run");
+	const operations = sandboxOps(executor, "tool-one-run");
 	const result = await operations.exec("failing-tool", cwd, { onData: (data) => output.push(data) });
 	const text = Buffer.concat(output).toString("utf8");
 	assert.equal(result.exitCode, 1);
@@ -56,7 +89,7 @@ test("known host development caches recommend the managed cache adapter", async 
 		denialsComplete: true,
 	});
 	const output: Buffer[] = [];
-	await createNativeSandboxOps(executor, DEFAULT_CONFIG, [], [], [], "cache-denial").exec("cargo build", cwd, {
+	await sandboxOps(executor, "cache-denial").exec("cargo build", cwd, {
 		onData: (data) => output.push(data),
 	});
 	const text = Buffer.concat(output).toString("utf8");
@@ -87,7 +120,7 @@ test("network-only and mixed denial hints stay grouped with three total examples
 		denialsComplete: false,
 	});
 	const output: Buffer[] = [];
-	await createNativeSandboxOps(executor, DEFAULT_CONFIG, [], [], [], "mixed-denial").exec("tool", cwd, {
+	await sandboxOps(executor, "mixed-denial").exec("tool", cwd, {
 		onData: (data) => output.push(data),
 	});
 	const text = Buffer.concat(output).toString("utf8");
@@ -125,6 +158,7 @@ test("interruption aborts one nono command with its exact host snapshot", async 
 		["example.com"],
 		[],
 		"interrupt-cleanup",
+		environmentOptions,
 	).exec("sleep", tmpdir(), {
 		onData() {},
 		signal: controller.signal,
@@ -141,12 +175,8 @@ test("interruption aborts one nono command with its exact host snapshot", async 
 test("filesystem grants are revalidated immediately before the executor request", async () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pi-revalidate-grants-"));
 	const executor = new FakeSandboxExecutor({ exitCode: 0, denials: [], denialsComplete: true });
-	const operations = createNativeSandboxOps(
+	const operations = sandboxOps(
 		executor,
-		DEFAULT_CONFIG,
-		[],
-		[],
-		[],
 		"revalidate",
 		() => { throw new Error("approved path became a symlink"); },
 	);

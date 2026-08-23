@@ -11,6 +11,8 @@ import {
 } from "./development-caches.ts";
 import { canonicalize } from "./io-permissions.ts";
 
+const sourceEnvironment = Object.freeze({ ...process.env });
+
 test("maps current base rights and command-local folder grants", () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pi-sandbox-policy-"));
 	const canonicalCwd = canonicalize(cwd);
@@ -23,6 +25,8 @@ test("maps current base rights and command-local folder grants", () => {
 		DEFAULT_CONFIG,
 		[{ kind: "write", path: state, directory: true }],
 		[],
+		[],
+		sourceEnvironment,
 	);
 	assert.match(request.command.program, /\/bash$/);
 	assert.deepEqual(request.command.args, ["-c", "issues search view=issue number=79"]);
@@ -101,6 +105,8 @@ test("native cache rights overlapping the workspace are omitted", () => {
 		DEFAULT_CONFIG,
 		[],
 		[],
+		[],
+		sourceEnvironment,
 	);
 	assert.equal(
 		request.policy.base_rights.some(
@@ -126,6 +132,8 @@ test("native policy honors a configured development cache root", () => {
 		config,
 		[],
 		[],
+		[],
+		sourceEnvironment,
 	);
 
 	assert.equal(
@@ -160,6 +168,8 @@ test("legacy :root read setting is ignored for nono", () => {
 		},
 		[],
 		[],
+		[],
+		sourceEnvironment,
 	);
 	assert.equal(request.policy.base_rights.some((right) => right.path === "/"), false);
 });
@@ -181,6 +191,8 @@ test("missing configured read roots are omitted instead of becoming create right
 		},
 		[],
 		[],
+		[],
+		sourceEnvironment,
 	);
 	assert.equal(request.policy.base_rights.some((right) => right.path === missing), false);
 });
@@ -201,6 +213,8 @@ test("native deny globs reject dot segments before reaching Rust", () => {
 					},
 					[],
 					[],
+					[],
+					sourceEnvironment,
 				),
 			/cannot contain \. or \.\./,
 		);
@@ -218,6 +232,7 @@ test("nono policy maps approved hosts and exact loopback ports", () => {
 		[],
 		["example.com"],
 		[],
+		sourceEnvironment,
 	);
 	assert.deepEqual(proxied.policy.network, {
 		mode: "proxy",
@@ -233,6 +248,7 @@ test("nono policy maps approved hosts and exact loopback ports", () => {
 		[],
 		[],
 		[43127],
+		sourceEnvironment,
 	);
 	assert.deepEqual(local.policy.network, { mode: "loopback", ports: [43127] });
 	const localAndProxy = buildSandboxExecRequest(
@@ -244,6 +260,7 @@ test("nono policy maps approved hosts and exact loopback ports", () => {
 		[],
 		["example.com"],
 		[43127],
+		sourceEnvironment,
 	);
 	assert.deepEqual(localAndProxy.policy.network, {
 		mode: "proxy",
@@ -251,7 +268,9 @@ test("nono policy maps approved hosts and exact loopback ports", () => {
 		local_ports: [43127],
 	});
 	assert.throws(
-		() => buildSandboxExecRequest("invalid", "true", cwd, undefined, DEFAULT_CONFIG, [], [], [0]),
+		() => buildSandboxExecRequest(
+			"invalid", "true", cwd, undefined, DEFAULT_CONFIG, [], [], [0], sourceEnvironment,
+		),
 		/ports must be integers from 1 to 65535/,
 	);
 	const request = buildSandboxExecRequest(
@@ -265,6 +284,8 @@ test("nono policy maps approved hosts and exact loopback ports", () => {
 		},
 		[],
 		[],
+		[],
+		sourceEnvironment,
 	);
 	assert.deepEqual(request.policy.network, { mode: "blocked" });
 	assert.deepEqual(request.policy.unix_socket_roots, [canonicalize("/tmp/service.sock")]);
@@ -285,6 +306,8 @@ test("nono policy rejects broad and relative Unix socket access", () => {
 				},
 				[],
 				[],
+				[],
+				sourceEnvironment,
 			),
 		/does not support allowing all Unix sockets/,
 	);
@@ -301,6 +324,8 @@ test("nono policy rejects broad and relative Unix socket access", () => {
 				},
 				[],
 				[],
+				[],
+				sourceEnvironment,
 			),
 		/must be absolute/,
 	);
