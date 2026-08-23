@@ -1,8 +1,8 @@
 {
-	"name": "pi-guardian",
+	"name": "pi-nono",
 	"private": true,
 	"version": "3.0.0",
-	"description": "Fail-closed native sandbox and approval policy for the Pi coding agent",
+	"description": "nono sandboxing and explicit permissions for the Pi coding agent",
 	"type": "module",
 	"license": "MIT",
 	"publishConfig": {
@@ -11,11 +11,11 @@
 	},
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/behzade/pi-guardian.git",
+		"url": "git+https://github.com/behzade/pi-nono.git",
 		"directory": "extensions/sandbox"
 	},
-	"bugs": "https://github.com/behzade/pi-guardian/issues",
-	"homepage": "https://github.com/behzade/pi-guardian#readme",
+	"bugs": "https://github.com/behzade/pi-nono/issues",
+	"homepage": "https://github.com/behzade/pi-nono#readme",
 	"keywords": ["pi-package", "pi-extension", "sandbox", "nono"],
 	"engines": {
 		"node": ">=22.19.0"

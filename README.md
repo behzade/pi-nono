@@ -1,10 +1,10 @@
-# Guardian
+# pi-nono
 
-Guardian is a sandbox and permission system for the [Pi coding agent](https://pi.dev), powered by [nono](https://github.com/nolabs-ai/nono).
+pi-nono is a sandbox and permission system for the [Pi coding agent](https://pi.dev), powered by [nono](https://github.com/nolabs-ai/nono).
 It gives Pi workspace access by default and asks for approval when a task needs
 access to another file, service, or local port.
 
-> **Alpha:** Guardian uses nono, which is still alpha upstream.
+> **Alpha:** pi-nono uses nono, which is still alpha upstream.
 
 ## Default permissions
 
@@ -17,11 +17,11 @@ access to another file, service, or local port.
 | Remote hosts | Explicit host approval |
 | Loopback services | Explicit host and port approval |
 
-Guardian redirects common package-manager caches into
+pi-nono redirects common package-manager caches into
 `~/.cache/pi-sandbox`. Credentials, authentication files, `.env` files, private
-keys, and Guardian/Pi/Codex control paths remain protected.
+keys, and sandbox/Pi/Codex control paths remain protected.
 
-The policy covers Pi's built-in file tools, shell commands, and Guardian
+The policy covers Pi's built-in file tools, shell commands, and pi-nono
 background jobs.
 
 ## Install
@@ -30,7 +30,7 @@ npm packages support macOS on Apple Silicon and Linux x86-64. Linux requires
 unprivileged user namespaces and `bwrap` from the system package manager.
 
 ```sh
-pi install npm:pi-guardian@next
+pi install npm:pi-nono@next
 ```
 
 Nix users can use the repository flake. Tagged releases also include the main
@@ -38,7 +38,7 @@ package and platform-specific npm tarballs.
 
 ## Permissions
 
-When a task needs more access, Guardian shows the exact capability and lets the
+When a task needs more access, pi-nono shows the exact capability and lets the
 user approve it for the current Pi session or the project.
 
 Supported capabilities are:
@@ -50,7 +50,7 @@ Supported capabilities are:
 
 | Policy | Path | Scope |
 | --- | --- | --- |
-| Machine | `~/.config/guardian/sandbox.json` | All Guardian projects |
+| Machine | `~/.config/guardian/sandbox.json` | All pi-nono projects |
 | Project | `.guardian/sandbox.json` | Current trusted project |
 | Session | `~/.config/guardian/session-rights/<session-id-hash>.json` | Current Pi session |
 
@@ -59,7 +59,7 @@ session is resumed.
 
 ## How it works
 
-Guardian builds an immutable nono profile from the active machine, project, and
+pi-nono builds an immutable nono profile from the active machine, project, and
 session policy for each command. Background jobs keep the policy captured when
 they start.
 

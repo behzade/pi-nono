@@ -109,7 +109,7 @@ test("session policy writes reject stale snapshots and symlinked control paths",
 	const rightsRoot = join(linked.root, "session-rights");
 	rmSync(rightsRoot, { recursive: true });
 	symlinkSync(target, rightsRoot);
-	assert.throws(() => loadSessionPolicy(linked.identity, machine, linked.root), /symlinked Guardian config directory/);
+	assert.throws(() => loadSessionPolicy(linked.identity, machine, linked.root), /symlinked pi-nono config directory/);
 });
 
 test("session files themselves cannot be forged or symlink aliases", () => {

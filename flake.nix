@@ -1,5 +1,5 @@
 {
-  description = "Pi Guardian native sandbox, approval transport, and background-job extension";
+  description = "pi-nono native sandbox, approval transport, and background-job extension";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
 
@@ -18,13 +18,13 @@
         system:
         let
           pkgs = import nixpkgs { inherit system; };
-          guardian = pkgs.callPackage ./nix/pi-sandbox-extension.nix {
+          piNono = pkgs.callPackage ./nix/pi-nono.nix {
             nono = pkgs.nono;
           };
         in
         {
-          inherit guardian;
-          default = guardian;
+          pi-nono = piNono;
+          default = piNono;
         }
       );
 
@@ -34,14 +34,14 @@
           pkgs = import nixpkgs { inherit system; };
         in
         {
-          guardian = self.packages.${system}.guardian;
-          guardian-tests = pkgs.runCommand "pi-guardian-tests" {
+          pi-nono = self.packages.${system}.pi-nono;
+          pi-nono-tests = pkgs.runCommand "pi-nono-tests" {
             nativeBuildInputs = [ pkgs.nodejs ];
           } ''
             cp ${self}/extensions/sandbox/*.ts .
             cp ${self}/extensions/sandbox/package-lock.test.mjs .
             cp ${self}/extensions/sandbox/package-lock.json .
-            cp -R ${self.packages.${system}.guardian}/node_modules .
+            cp -R ${self.packages.${system}.pi-nono}/node_modules .
             chmod -R u+w node_modules
             node --test package-lock.test.mjs ${self}/packaging/npm/build-packages.test.mjs
             node --import ./test-setup.ts --test \

@@ -30,7 +30,7 @@ function workspace(): string {
 const basePolicy = (): ProjectSandboxPolicy => ({ version: 1, rights: [] });
 const machine = mergeGlobalConfig(DEFAULT_CONFIG, {});
 
-test("loads and saves one portable versioned project policy under Guardian's control root", () => {
+test("loads and saves one portable versioned project policy under pi-nono's control root", () => {
 	const cwd = workspace();
 	assert.equal(projectPolicyPath(cwd), join(cwd, ".guardian", "sandbox.json"));
 	const policy: ProjectSandboxPolicy = {
@@ -86,7 +86,7 @@ test("activates exact loopback endpoints, hosts, file rights, and tree rights", 
 	}, cwd, machine), /read rights must target an existing path/);
 });
 
-test("project .git writes are grants while Guardian and Pi control writes are rejected", () => {
+test("project .git writes are grants while pi-nono and Pi control writes are rejected", () => {
 	const cwd = workspace();
 	mkdirSync(join(cwd, ".git"));
 	const active = activateProjectPolicy({

@@ -233,9 +233,9 @@ export function buildNonoProfile(
 		$schema: "https://nono.sh/schemas/nono-profile.schema.json",
 		extends: "default",
 		meta: {
-			name: "guardian-command",
+			name: "pi-nono-command",
 			version: "1",
-			description: "Ephemeral profile generated from a validated Guardian policy snapshot",
+			description: "Ephemeral profile generated from a validated pi-nono policy snapshot",
 		},
 		filesystem,
 		network: {

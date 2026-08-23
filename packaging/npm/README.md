@@ -1,6 +1,6 @@
 # npm release packaging
 
-Guardian publishes one TypeScript package plus platform-specific nono packages. The source
+pi-nono publishes one TypeScript package plus platform-specific nono packages. The source
 package remains private to prevent publishing without its native dependencies;
 `build-packages.mjs main` creates the publishable manifest.
 
@@ -8,8 +8,8 @@ Supported targets:
 
 | Package | Native contents |
 | --- | --- |
-| `pi-guardian-darwin-arm64` | nono 0.61.1 |
-| `pi-guardian-linux-x64` | nono 0.61.1 |
+| `pi-nono-darwin-arm64` | nono 0.61.1 |
+| `pi-nono-linux-x64` | nono 0.61.1 |
 
 The build accepts only explicit absolute input paths. It checks nono's version,
 architecture, checksum, and runtime linkage, and rejects symlinks and Nix-store
@@ -36,7 +36,7 @@ node packaging/npm/build-packages.mjs native \
 ```
 
 The nono inputs must come from the official v0.61.1 release artifacts pinned by
-Guardian's nixpkgs revision. Linux hosts must install Bubblewrap through their
+pi-nono's nixpkgs revision. Linux hosts must install Bubblewrap through their
 OS package manager. Review upstream security and release notes before changing
 nono.
 

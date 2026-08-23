@@ -30,14 +30,14 @@ jobs:
       - run: |
           node packaging/npm/build-packages.mjs main --out "$PWD/dist/npm"
           mkdir -p dist/tarballs
-          npm pack ./dist/npm/pi-guardian --pack-destination dist/tarballs
+          npm pack ./dist/npm/pi-nono --pack-destination dist/tarballs
           tar -tf dist/tarballs/*.tgz | tee dist/main-contents.txt
           ! grep -E '(\.test\.ts|test-setup\.ts|package-lock\.json)$' dist/main-contents.txt
           grep -F 'package/README.md' dist/main-contents.txt
           grep -F 'package/LICENSE' dist/main-contents.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: guardian-main-npm
+          name: pi-nono-main-npm
           path: dist/tarballs/*.tgz
 
   darwin-arm64:
@@ -59,22 +59,22 @@ jobs:
             --platform darwin --arch arm64 --out "$PWD/dist/npm" \
             --nono "$nono" --nono-license "$PWD/dist/download/NONO-LICENSE"
           node packaging/npm/build-packages.mjs main --out "$PWD/dist/npm"
-          npm pack ./dist/npm/pi-guardian-darwin-arm64 --pack-destination dist/tarballs
-          npm pack ./dist/npm/pi-guardian --pack-destination dist/tarballs
+          npm pack ./dist/npm/pi-nono-darwin-arm64 --pack-destination dist/tarballs
+          npm pack ./dist/npm/pi-nono --pack-destination dist/tarballs
           mkdir dist/install
           cd dist/install
           npm init -y
           npm install --ignore-scripts --legacy-peer-deps \
-            ../tarballs/pi-guardian-darwin-arm64-3.0.0.tgz \
-            ../tarballs/pi-guardian-3.0.0.tgz \
+            ../tarballs/pi-nono-darwin-arm64-3.0.0.tgz \
+            ../tarballs/pi-nono-3.0.0.tgz \
             @earendil-works/pi-coding-agent@0.84.2
           mkdir home
           HOME="$PWD/home" PI_OFFLINE=1 ./node_modules/.bin/pi --no-extensions \
-            -e "$PWD/node_modules/pi-guardian/index.ts" --list-models >/dev/null
+            -e "$PWD/node_modules/pi-nono/index.ts" --list-models >/dev/null
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: guardian-darwin-arm64-npm
-          path: dist/tarballs/pi-guardian-darwin-arm64-*.tgz
+          name: pi-nono-darwin-arm64-npm
+          path: dist/tarballs/pi-nono-darwin-arm64-*.tgz
 
   linux-x64:
     runs-on: ubuntu-latest
@@ -98,22 +98,22 @@ jobs:
             --platform linux --arch x64 --out "$PWD/dist/npm" \
             --nono "$nono" --nono-license "$PWD/dist/download/NONO-LICENSE"
           node packaging/npm/build-packages.mjs main --out "$PWD/dist/npm"
-          npm pack ./dist/npm/pi-guardian-linux-x64 --pack-destination dist/tarballs
-          npm pack ./dist/npm/pi-guardian --pack-destination dist/tarballs
+          npm pack ./dist/npm/pi-nono-linux-x64 --pack-destination dist/tarballs
+          npm pack ./dist/npm/pi-nono --pack-destination dist/tarballs
           mkdir dist/install
           cd dist/install
           npm init -y
           npm install --ignore-scripts --legacy-peer-deps \
-            ../tarballs/pi-guardian-linux-x64-3.0.0.tgz \
-            ../tarballs/pi-guardian-3.0.0.tgz \
+            ../tarballs/pi-nono-linux-x64-3.0.0.tgz \
+            ../tarballs/pi-nono-3.0.0.tgz \
             @earendil-works/pi-coding-agent@0.84.2
           mkdir home
           HOME="$PWD/home" PI_OFFLINE=1 ./node_modules/.bin/pi --no-extensions \
-            -e "$PWD/node_modules/pi-guardian/index.ts" --list-models >/dev/null
+            -e "$PWD/node_modules/pi-nono/index.ts" --list-models >/dev/null
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: guardian-linux-x64-npm
-          path: dist/tarballs/pi-guardian-linux-x64-*.tgz
+          name: pi-nono-linux-x64-npm
+          path: dist/tarballs/pi-nono-linux-x64-*.tgz
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -124,7 +124,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: guardian-*-npm
+          pattern: pi-nono-*-npm
           path: release-assets
           merge-multiple: true
       - name: Create prerelease
@@ -134,4 +134,4 @@ jobs:
         run: >-
           gh release create "$GITHUB_REF_NAME" release-assets/*.tgz
           --verify-tag --generate-notes --prerelease
-          --title "Guardian $GITHUB_REF_NAME"
+          --title "pi-nono $GITHUB_REF_NAME"

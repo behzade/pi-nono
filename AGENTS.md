@@ -1,6 +1,6 @@
 # Agent Instructions
 
-Keep the Guardian policy adapter, fixed nono executable, and Linux-only fixed
+Keep the pi-nono policy adapter, fixed nono executable, and Linux-only fixed
 Bubblewrap deny layer as one security boundary. Preserve fail-closed behavior, explicit approval, exact policy
 validation, immutable command snapshots, and no automatic retry.
 

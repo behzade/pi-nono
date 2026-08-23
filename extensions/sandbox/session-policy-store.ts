@@ -177,10 +177,10 @@ function assertSafeStorage(configRoot: string, create: boolean): void {
 	for (const directory of [root, rightsRoot]) {
 		const metadata = lstatIfExists(directory);
 		if (metadata?.isSymbolicLink()) {
-			throw new Error(`A symlinked Guardian config directory cannot hold session rights: ${directory}`);
+			throw new Error(`A symlinked pi-nono config directory cannot hold session rights: ${directory}`);
 		}
 		if (metadata && !metadata.isDirectory()) {
-			throw new Error(`Guardian session-rights control path must be a directory: ${directory}`);
+			throw new Error(`pi-nono session-rights control path must be a directory: ${directory}`);
 		}
 	}
 	if (!create) return;
@@ -188,7 +188,7 @@ function assertSafeStorage(configRoot: string, create: boolean): void {
 	for (const directory of [root, rightsRoot]) {
 		const metadata = lstatSync(directory);
 		if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
-			throw new Error(`Guardian session-rights control path is unsafe: ${directory}`);
+			throw new Error(`pi-nono session-rights control path is unsafe: ${directory}`);
 		}
 	}
 }
