@@ -15,6 +15,7 @@ Unlike command-based sandboxes that allow or deny volatile scripts, pi-nono enfo
 | System temporary directories | Read and write |
 | `~/.cache/pi-sandbox` | Read and write |
 | Workspace Git metadata | Read; write with explicit `.git` approval |
+| Workspace `.guardian` policy files | Read-only |
 | Remote hosts | Explicit host approval |
 | Loopback services | Explicit host and port approval |
 

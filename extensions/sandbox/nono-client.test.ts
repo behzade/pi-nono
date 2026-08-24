@@ -51,6 +51,21 @@ test("Linux delegates overlapping denies to the mount layer while macOS keeps Se
 	assert.deepEqual(macos.filesystem.deny, ["/work/.env"]);
 });
 
+test("macOS keeps project .guardian readable but read-only", () => {
+	const value = request({ mode: "blocked" });
+	value.policy.denies = [{ access: "write", pattern: "/work/.guardian", scope: "tree" }];
+	const profile = buildNonoProfile(value, "darwin") as {
+		filesystem: { read: string[]; deny: string[] };
+		unsafe_macos_seatbelt_rules: string[];
+	};
+
+	assert(profile.filesystem.read.includes("/work"));
+	assert.deepEqual(profile.filesystem.deny, []);
+	assert.deepEqual(profile.unsafe_macos_seatbelt_rules, [
+		'(deny file-write* (subpath "/work/.guardian"))',
+	]);
+});
+
 test("profile maps exact hosts without enabling unrestricted network", () => {
 	const profile = buildNonoProfile(request({
 		mode: "proxy",

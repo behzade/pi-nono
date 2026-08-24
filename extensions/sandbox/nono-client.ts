@@ -200,6 +200,16 @@ export function buildNonoProfile(
 		.filter(existsSync);
 	const runtimeConfigFiles = [join(homedir(), ".gitconfig")].filter(existsSync);
 	const runtimeConfigDirectories = [join(homedir(), ".config", "git")].filter(existsSync);
+	// Nono's portable `deny` blocks reads too. Linux mounts this fixed control
+	// root read-only; macOS needs an exact Seatbelt write deny instead.
+	const guardianWriteDeny = platform === "darwin"
+		? request.policy.denies.find((deny) =>
+				deny.access === "write" &&
+				deny.scope === "tree" &&
+				deny.pattern === join(request.cwd, ".guardian")
+			)
+		: undefined;
+	const seatbeltDenies = request.policy.denies.filter((deny) => deny !== guardianWriteDeny);
 	const filesystem = {
 		allow: rightPaths(rights, "write", "tree"),
 		read: [...new Set([
@@ -220,7 +230,7 @@ export function buildNonoProfile(
 		unix_socket: [...request.policy.unix_socket_roots].sort(),
 		deny: platform === "linux"
 			? []
-			: [...new Set(request.policy.denies.map((deny) => deny.pattern))].sort(),
+			: [...new Set(seatbeltDenies.map((deny) => deny.pattern))].sort(),
 	};
 	const network = request.policy.network;
 	const allowedHosts = network.mode === "proxy" ? network.allowed_hosts : [];
@@ -238,6 +248,13 @@ export function buildNonoProfile(
 			description: "Ephemeral profile generated from a validated pi-nono policy snapshot",
 		},
 		filesystem,
+		...(guardianWriteDeny
+			? {
+					unsafe_macos_seatbelt_rules: [
+						`(deny file-write* (subpath ${JSON.stringify(guardianWriteDeny.pattern)}))`,
+					],
+				}
+			: {}),
 		network: {
 			block: allowedHosts.length === 0,
 			allow_domain: allowedHosts,
