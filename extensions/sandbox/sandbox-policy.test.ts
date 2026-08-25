@@ -30,6 +30,7 @@ test("maps current base rights and command-local folder grants", () => {
 	);
 	assert.match(request.command.program, /\/bash$/);
 	assert.deepEqual(request.command.args, ["-c", "issues search view=issue number=79"]);
+	assert.equal(request.interactive, false);
 	assert.equal(request.timeout_ms, 30_000);
 	assert.ok(
 		request.policy.base_rights.some(

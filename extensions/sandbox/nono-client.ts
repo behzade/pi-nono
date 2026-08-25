@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcess, type StdioOptions } from "node:child_process";
 import {
 	accessSync,
 	closeSync,
@@ -34,11 +34,16 @@ const nonoError = (cause: unknown) => new NonoClientError({
 });
 
 interface PendingProcess {
-	child: ChildProcessWithoutNullStreams;
+	child: ChildProcess;
 	profileDirectory: string;
 	outputBytes: number;
 	outputLimit: number;
 	truncated: boolean;
+}
+
+/** One-shot bash is not a TTY. Keep stdin open only when a job will write to it. */
+export function sandboxCommandStdio(interactive: boolean): StdioOptions {
+	return [interactive ? "pipe" : "ignore", "pipe", "pipe"];
 }
 
 export class NonoClient {
@@ -112,7 +117,7 @@ export class NonoClient {
 			const child = spawn(launch.program, launch.args, {
 				cwd: request.cwd,
 				env: request.env,
-				stdio: ["pipe", "pipe", "pipe"],
+				stdio: sandboxCommandStdio(request.interactive === true),
 				detached: true,
 			});
 			const pending: PendingProcess = {
@@ -169,7 +174,7 @@ export class NonoClient {
 
 	writeStdin(id: string, data: Buffer): void {
 		const pending = this.#pending.get(id);
-		if (!pending?.child.stdin.writable) throw new Error(`Command is not running: ${id}`);
+		if (!pending?.child.stdin?.writable) throw new Error(`Command is not running: ${id}`);
 		pending.child.stdin.write(data);
 	}
 
@@ -310,12 +315,12 @@ async function checkNono(path: string): Promise<void> {
 	});
 }
 
-function terminateGroup(child: ChildProcessWithoutNullStreams): void {
+function terminateGroup(child: ChildProcess): void {
 	killGroup(child, "SIGTERM");
 	setTimeout(() => killGroup(child, "SIGKILL"), SHUTDOWN_GRACE_MS).unref();
 }
 
-function killGroup(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
+function killGroup(child: ChildProcess, signal: NodeJS.Signals): void {
 	if (!child.pid) return;
 	try {
 		process.kill(-child.pid, signal);

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import test from "node:test";
 import type { SandboxExecRequest } from "./sandbox-protocol.ts";
-import { buildNonoProfile } from "./nono-client.ts";
+import { buildNonoProfile, sandboxCommandStdio } from "./nono-client.ts";
 
 function request(network: SandboxExecRequest["policy"]["network"]): SandboxExecRequest {
 	return {
@@ -27,6 +27,11 @@ function request(network: SandboxExecRequest["policy"]["network"]): SandboxExecR
 		},
 	};
 }
+
+test("one-shot commands close stdin; interactive jobs keep a writable pipe", () => {
+	assert.deepEqual(sandboxCommandStdio(false), ["ignore", "pipe", "pipe"]);
+	assert.deepEqual(sandboxCommandStdio(true), ["pipe", "pipe", "pipe"]);
+});
 
 test("profile maps exact filesystem scopes and blocks network by default", () => {
 	const profile = buildNonoProfile(request({ mode: "blocked" })) as {
