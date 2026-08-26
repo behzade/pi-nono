@@ -205,6 +205,11 @@ export function buildNonoProfile(
 		.filter(existsSync);
 	const runtimeConfigFiles = [join(homedir(), ".gitconfig")].filter(existsSync);
 	const runtimeConfigDirectories = [join(homedir(), ".config", "git")].filter(existsSync);
+	// Zig reads this database directly after the default-readable system roots.
+	const runtimeTrustFiles = platform === "darwin"
+		? ["/Library/Keychains/System.keychain"]
+		: [];
+	const protectionBypassFiles = [...runtimeConfigFiles, ...runtimeTrustFiles];
 	// Nono's portable `deny` blocks reads too. Linux mounts this fixed control
 	// root read-only; macOS needs an exact Seatbelt write deny instead.
 	const guardianWriteDeny = platform === "darwin"
@@ -229,9 +234,9 @@ export function buildNonoProfile(
 		read_file: [...new Set([
 			...rightPaths(rights, "read", "file"),
 			...runtimeDeviceFiles,
-			...runtimeConfigFiles,
+			...protectionBypassFiles,
 		])].sort(),
-		bypass_protection: [...runtimeConfigFiles, ...runtimeConfigDirectories],
+		bypass_protection: [...protectionBypassFiles, ...runtimeConfigDirectories],
 		unix_socket: [...request.policy.unix_socket_roots].sort(),
 		deny: platform === "linux"
 			? []

@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import type { SandboxExecRequest } from "./sandbox-protocol.ts";
-import { buildNonoProfile, sandboxCommandStdio } from "./nono-client.ts";
+import { DEFAULT_CONFIG } from "./sandbox-config.ts";
+import { buildNonoProfile, NonoClient, sandboxCommandStdio } from "./nono-client.ts";
+import { buildSandboxExecRequest } from "./sandbox-policy.ts";
 
 function request(network: SandboxExecRequest["policy"]["network"]): SandboxExecRequest {
 	return {
@@ -56,6 +60,22 @@ test("Linux delegates overlapping denies to the mount layer while macOS keeps Se
 	assert.deepEqual(macos.filesystem.deny, ["/work/.env"]);
 });
 
+test("macOS grants Zig the exact machine trust-store file", () => {
+	const trustStore = "/Library/Keychains/System.keychain";
+	const darwin = buildNonoProfile(request({ mode: "blocked" }), "darwin") as {
+		filesystem: { read_file: string[]; bypass_protection: string[] };
+	};
+	const linux = buildNonoProfile(request({ mode: "blocked" }), "linux") as {
+		filesystem: { read_file: string[]; bypass_protection: string[] };
+	};
+
+	assert(darwin.filesystem.read_file.includes(trustStore));
+	assert(darwin.filesystem.bypass_protection.includes(trustStore));
+	assert.equal(linux.filesystem.read_file.includes(trustStore), false);
+	assert.equal(linux.filesystem.bypass_protection.includes(trustStore), false);
+	assert.equal(darwin.filesystem.read_file.includes("/Library/Keychains"), false);
+});
+
 test("macOS keeps project .guardian readable but read-only", () => {
 	const value = request({ mode: "blocked" });
 	value.policy.denies = [{ access: "write", pattern: "/work/.guardian", scope: "tree" }];
@@ -92,3 +112,69 @@ test("local endpoints map only their exact approved ports", () => {
 		assert.equal(profile.network.open_port_range, undefined);
 	}
 });
+
+const zigHttpsHost = "deps.files.ghostty.org";
+const zigHttpsUrl = `https://${zigHttpsHost}/uucode-2826a37a4562284fdacd8fa029d49509cc9bffcd.tar.gz`;
+const zigHttpsNono = process.env.PI_NONO_ZIG_HTTPS_TEST_NONO;
+const zigHttpsZig = process.env.PI_NONO_ZIG_HTTPS_TEST_ZIG;
+const runZigHttpsRegression = process.platform === "darwin" &&
+	zigHttpsNono !== undefined && zigHttpsZig !== undefined;
+
+test("macOS Zig HTTPS works from a fresh cache only for the permitted host", {
+	skip: runZigHttpsRegression
+		? false
+		: "set PI_NONO_ZIG_HTTPS_TEST_NONO and PI_NONO_ZIG_HTTPS_TEST_ZIG on macOS",
+}, async () => {
+	assert(zigHttpsNono);
+	assert(zigHttpsZig);
+	const cwd = mkdtempSync(join(tmpdir(), "pi-zig-https-"));
+	writeFileSync(join(cwd, "build.zig"),
+		'const std = @import("std");\npub fn build(b: *std.Build) void { _ = b; }\n');
+	writeFileSync(join(cwd, "build.zig.zon"), [
+		".{",
+		"    .name = .pi_nono_https_test,",
+		'    .version = "0.0.0",',
+		"    .fingerprint = 0x79f557e732bd0123,",
+		'    .minimum_zig_version = "0.16.0",',
+		"    .dependencies = .{},",
+		'    .paths = .{""},',
+		"}",
+		"",
+	].join("\n"));
+	const client = await NonoClient.start(zigHttpsNono, "");
+	try {
+		const fetch = async (id: string, allowedHosts: string[]) => {
+			const cache = join(cwd, id);
+			mkdirSync(cache);
+			const command = `${shellArg(zigHttpsZig)} fetch --global-cache-dir ${shellArg(cache)} ${shellArg(zigHttpsUrl)}`;
+			const request = buildSandboxExecRequest(
+				id,
+				command,
+				cwd,
+				60,
+				DEFAULT_CONFIG,
+				[],
+				allowedHosts,
+				[],
+				process.env,
+			);
+			const output: Buffer[] = [];
+			const result = await client.exec(request, (chunk) => output.push(chunk));
+			return { result, output: Buffer.concat(output).toString("utf8") };
+		};
+
+		const permitted = await fetch("permitted-cache", [zigHttpsHost]);
+		assert.equal(permitted.result.exitCode, 0, permitted.output);
+		assert.match(permitted.output, /^uucode-0\.2\.0-/m);
+
+		const blocked = await fetch("blocked-cache", ["example.com"]);
+		assert.notEqual(blocked.result.exitCode, 0, blocked.output);
+	} finally {
+		await client.shutdown();
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+function shellArg(value: string): string {
+	return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
