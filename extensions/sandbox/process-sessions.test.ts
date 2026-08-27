@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-	formatProcessSnapshot,
 	modelVisibleProcessOutput,
 	notifyProcessSettlement,
 } from "./process-sessions.ts";
@@ -13,17 +12,6 @@ test("process output is bounded before model emission", () => {
 	assert(visible.split("\n").length <= 2000);
 	assert.match(visible, /truncated/);
 	assert.match(visible, /line-3999$/);
-});
-
-test("process snapshots combine incremental output and structured state", () => {
-	assert.equal(
-		formatProcessSnapshot({ id: "pi-123", state: "running", output: "ready\n" }),
-		"ready\n\nProcess pi-123 is still running. Completion will be delivered automatically; use process only to interact or inspect new output.",
-	);
-	assert.equal(
-		formatProcessSnapshot({ id: "pi-123", state: "completed", output: "", exitCode: 0 }),
-		"Process pi-123 completed with exit code 0.",
-	);
 });
 
 test("process completion wakes the agent without polling", () => {

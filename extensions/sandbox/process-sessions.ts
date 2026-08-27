@@ -1,7 +1,4 @@
-import type {
-	ProcessSessionSettlement,
-	ProcessSessionSnapshot,
-} from "./native-process-sessions.ts";
+import type { ProcessSessionSnapshot } from "./native-process-sessions.ts";
 
 const MODEL_MAX_OUTPUT_BYTES = 50 * 1024;
 const MODEL_MAX_OUTPUT_LINES = 2000;
@@ -54,7 +51,7 @@ interface ProcessCompletionMessenger {
 			customType: string;
 			content: string;
 			display: boolean;
-			details: Omit<ProcessSessionSettlement, "output">;
+			details: Omit<ProcessSessionSnapshot, "output">;
 		},
 		options: { triggerTurn: true; deliverAs: "steer" },
 	): void;
@@ -62,7 +59,7 @@ interface ProcessCompletionMessenger {
 
 export function notifyProcessSettlement(
 	messenger: ProcessCompletionMessenger,
-	settlement: ProcessSessionSettlement,
+	settlement: ProcessSessionSnapshot,
 ): void {
 	messenger.sendMessage({
 		customType: "process-session-result",

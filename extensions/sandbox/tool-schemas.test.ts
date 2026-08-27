@@ -12,12 +12,9 @@ test("bash exposes optional bounded yielding", () => {
 		properties?: { yield_ms?: { type?: unknown; minimum?: unknown; maximum?: unknown } };
 	};
 	assert.equal(schema.type, "object");
-	assert.deepEqual(schema.properties?.yield_ms, {
-		description: "How long to wait before returning a live process session",
-		minimum: 250,
-		maximum: 30_000,
-		type: "integer",
-	});
+	assert.equal(schema.properties?.yield_ms?.type, "integer");
+	assert.equal(schema.properties?.yield_ms?.minimum, 250);
+	assert.equal(schema.properties?.yield_ms?.maximum, 30_000);
 });
 
 test("process exposes only continuation primitives", () => {

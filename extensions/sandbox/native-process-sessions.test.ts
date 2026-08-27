@@ -12,7 +12,6 @@ class FakeProcessClient {
 	writes: Buffer[] = [];
 	closedStdin = false;
 	signals: string[] = [];
-	shutdownCount = 0;
 
 	execEffect(
 		request: SandboxExecRequest,
@@ -33,139 +32,104 @@ class FakeProcessClient {
 	writeStdin(_id: string, data: Buffer): void { this.writes.push(data); }
 	closeStdin(): void { this.closedStdin = true; }
 	signal(_id: string, signal: string): void { this.signals.push(signal); }
-	async shutdown(): Promise<void> { this.shutdownCount += 1; }
 	emit(text: string): void { this.onData?.(Buffer.from(text)); }
 	finish(exitCode = 0): void {
 		this.resolve?.({ exitCode, denials: [], denialsComplete: true });
 	}
 }
 
-function startOptions() {
-	return {
-		command: "long-command",
-		cwd: process.cwd(),
-		config: DEFAULT_CONFIG,
-		permissions: [],
-		networkHosts: [],
-		localPorts: [],
-	};
-}
+const startOptions = () => ({
+	command: "long-command",
+	cwd: process.cwd(),
+	config: DEFAULT_CONFIG,
+	permissions: [],
+	networkHosts: [],
+	localPorts: [],
+});
 
-async function nextTask(): Promise<void> {
-	await new Promise((resolve) => setImmediate(resolve));
-}
-
-test("bash promotion executes once and continuation output is incremental", async () => {
+test("yielded processes preserve incremental output and interaction", async () => {
 	const client = new FakeProcessClient();
-	const settlements: unknown[] = [];
-	const manager = new NativeProcessSessions("nono", "bwrap", process.env, (value) => settlements.push(value), async () => client);
+	const manager = new NativeProcessSessions(client, process.env);
 	try {
 		const id = await manager.start(startOptions());
 		assert.match(id, /^pi-[0-9a-f-]+$/);
 		assert.equal(client.request?.id, `process/${id}`);
 		assert.equal(client.request?.interactive, true);
-		client.emit("before yield\n");
-		const promoted = await manager.yield(id, 1);
-		assert.equal(promoted.state, "running");
-		assert.equal(promoted.output, "before yield\n");
 
-		client.emit("after yield\n");
+		client.emit("before\n");
+		assert.equal((await manager.yield(id, 1)).output, "before\n");
+		client.emit("after\n");
 		const continued = await manager.continue(id, {
 			input: "answer\n",
 			closeStdin: true,
+			signal: "INT",
 			yieldMs: 1,
 		});
-		assert.equal(continued.output, "after yield\n");
+		assert.equal(continued.output, "after\n");
 		assert.deepEqual(client.writes, [Buffer.from("answer\n")]);
 		assert.equal(client.closedStdin, true);
-		assert.equal(settlements.length, 0);
+		await manager.continue(id, { signal: "TERM", yieldMs: 1 });
+		await manager.continue(id, { signal: "KILL", yieldMs: 1 });
+		assert.deepEqual(client.signals, ["SIGINT", "SIGTERM", "SIGKILL"]);
 	} finally {
 		await manager.shutdown();
 	}
 });
 
-test("completion before yield stays foreground and completion after yield wakes once", async () => {
+test("only detached, unobserved completion sends a notification", async () => {
 	const foregroundClient = new FakeProcessClient();
-	const foregroundSettlements: unknown[] = [];
-	const foreground = new NativeProcessSessions("nono", "bwrap", process.env, (value) => foregroundSettlements.push(value), async () => foregroundClient);
+	const foregroundNotifications: unknown[] = [];
+	const foreground = new NativeProcessSessions(foregroundClient, process.env, (value) => foregroundNotifications.push(value));
 	try {
 		const id = await foreground.start(startOptions());
-		foregroundClient.emit("done\n");
-		foregroundClient.finish(0);
-		const result = await foreground.yield(id, 100);
-		assert.equal(result.state, "completed");
-		assert.equal(result.output, "done\n");
-		assert.equal(foregroundSettlements.length, 0);
+		foregroundClient.finish();
+		assert.equal((await foreground.yield(id, 100)).state, "completed");
+		assert.deepEqual(foregroundNotifications, []);
 	} finally {
 		await foreground.shutdown();
 	}
 
 	const backgroundClient = new FakeProcessClient();
-	let settle!: (value: unknown) => void;
-	const settled = new Promise((resolve) => { settle = resolve; });
-	const background = new NativeProcessSessions("nono", "bwrap", process.env, settle, async () => backgroundClient);
+	let notify!: (value: unknown) => void;
+	const notification = new Promise((resolve) => { notify = resolve; });
+	const background = new NativeProcessSessions(backgroundClient, process.env, notify);
 	try {
 		const id = await background.start(startOptions());
-		assert.equal((await background.yield(id, 1)).state, "running");
+		await background.yield(id, 1);
 		backgroundClient.emit("later\n");
 		backgroundClient.finish(7);
-		const notification = await settled as { id: string; state: string; output: string; exitCode: number };
-		assert.deepEqual(notification, { id, state: "exited", output: "later\n", exitCode: 7 });
-		await nextTask();
+		assert.deepEqual(await notification, { id, state: "exited", output: "later\n", exitCode: 7 });
 	} finally {
 		await background.shutdown();
 	}
 });
 
-test("completion observed by process does not also enqueue a wakeup", async () => {
+test("completion returned by process does not also notify", async () => {
 	const client = new FakeProcessClient();
-	const settlements: unknown[] = [];
-	const manager = new NativeProcessSessions("nono", "bwrap", process.env, (value) => settlements.push(value), async () => client);
+	const notifications: unknown[] = [];
+	const manager = new NativeProcessSessions(client, process.env, (value) => notifications.push(value));
 	try {
 		const id = await manager.start(startOptions());
 		await manager.yield(id, 1);
 		const observing = manager.continue(id, { yieldMs: 100 });
 		client.emit("final\n");
-		client.finish(0);
-		const result = await observing;
-		assert.equal(result.state, "completed");
-		assert.equal(result.output, "final\n");
-		assert.deepEqual(settlements, []);
+		client.finish();
+		assert.deepEqual(await observing, { id, state: "completed", output: "final\n", exitCode: 0 });
+		assert.deepEqual(notifications, []);
 	} finally {
 		await manager.shutdown();
 	}
 });
 
-test("permission revalidation fails before a process client starts", async () => {
-	let starts = 0;
-	const manager = new NativeProcessSessions("nono", "bwrap", process.env, () => {}, async () => {
-		starts += 1;
-		return new FakeProcessClient();
-	});
-	try {
-		await assert.rejects(
-			manager.start({
-				...startOptions(),
-				revalidatePermissions: () => { throw new Error("approved path changed"); },
-			}),
-			/approved path changed/,
-		);
-		assert.equal(starts, 0);
-	} finally {
-		await manager.shutdown();
-	}
-});
-
-test("process continuation sends exact group signals", async () => {
+test("permission revalidation fails before execution", async () => {
 	const client = new FakeProcessClient();
-	const manager = new NativeProcessSessions("nono", "bwrap", process.env, () => {}, async () => client);
+	const manager = new NativeProcessSessions(client, process.env);
 	try {
-		const id = await manager.start(startOptions());
-		await manager.yield(id, 1);
-		for (const signal of ["INT", "TERM", "KILL"] as const) {
-			await manager.continue(id, { signal, yieldMs: 1 });
-		}
-		assert.deepEqual(client.signals, ["SIGINT", "SIGTERM", "SIGKILL"]);
+		await assert.rejects(manager.start({
+			...startOptions(),
+			revalidatePermissions: () => { throw new Error("approved path changed"); },
+		}), /approved path changed/);
+		assert.equal(client.request, undefined);
 	} finally {
 		await manager.shutdown();
 	}

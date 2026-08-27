@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { Cause, Deferred, Effect, Exit, Fiber, Schema, Scope } from "effect";
-import type { SandboxExecResult } from "./sandbox-protocol.ts";
-import { NonoClient } from "./nono-client.ts";
+import { Cause, Deferred, Effect, Exit, Fiber, Scope } from "effect";
+import type { SandboxExecRequest, SandboxExecResult } from "./sandbox-protocol.ts";
 import {
 	buildSandboxExecRequest,
 	type NativeFilePermission,
@@ -13,16 +12,6 @@ import type { NativeSandboxConfig } from "./sandbox-config.ts";
 const MAX_RETAINED_BYTES = 2 * 1024 * 1024;
 const MAX_SESSIONS = 32;
 
-export class NativeProcessSessionError extends Schema.TaggedError<NativeProcessSessionError>()(
-	"NativeProcessSessionError",
-	{ message: Schema.String, cause: Schema.optional(Schema.Defect()) },
-) {}
-
-const sessionError = (cause: unknown) => new NativeProcessSessionError({
-	message: cause instanceof Error ? cause.message : String(cause),
-	cause,
-});
-
 export type ProcessSessionState = "running" | "completed" | "exited" | "failed" | "stopped";
 
 export interface ProcessSessionSnapshot {
@@ -33,35 +22,28 @@ export interface ProcessSessionSnapshot {
 	error?: string;
 }
 
-export interface ProcessSessionSettlement extends ProcessSessionSnapshot {}
-
-interface ProcessClient {
+export interface ProcessSessionClient {
 	execEffect(
-		request: ReturnType<typeof buildSandboxExecRequest>,
+		request: SandboxExecRequest,
 		onData: (data: Buffer) => void,
 		onStarted?: (pid: number) => void,
 	): Effect.Effect<SandboxExecResult, unknown>;
 	writeStdin(id: string, data: Buffer): void;
 	closeStdin(id: string): void;
 	signal(id: string, signal: "SIGINT" | "SIGTERM" | "SIGKILL"): void;
-	shutdown(): Promise<void>;
 }
 
 interface NativeSession {
 	id: string;
-	client: ProcessClient;
 	output: Buffer;
 	outputStart: number;
 	totalOutput: number;
 	deliveredOutput: number;
-	startedAt: Date;
-	pid?: number;
 	result?: SandboxExecResult;
 	error?: string;
 	stopped: boolean;
 	detached: boolean;
 	observers: number;
-	notified: boolean;
 	listeners: Set<() => void>;
 	fiber: Fiber.Fiber<void, never>;
 }
@@ -84,36 +66,36 @@ export interface ContinueProcessSessionOptions {
 	yieldMs: number;
 }
 
-type StartClient = () => Promise<ProcessClient>;
+function processError(cause: unknown): Error {
+	return cause instanceof Error ? cause : new Error(String(cause));
+}
 
 export class NativeProcessSessions {
+	readonly #client: ProcessSessionClient;
 	readonly #sourceEnvironment: SandboxSourceEnvironment;
-	readonly #startClient: StartClient;
 	readonly #sessions = new Map<string, NativeSession>();
 	readonly #scope = Scope.makeUnsafe();
-	readonly #onSettled: (settlement: ProcessSessionSettlement) => void;
+	readonly #onSettled: (settlement: ProcessSessionSnapshot) => void;
 	#closed = false;
 
 	constructor(
-		nonoPath: string,
-		bwrapPath: string,
+		client: ProcessSessionClient,
 		sourceEnvironment: SandboxSourceEnvironment,
-		onSettled: (settlement: ProcessSessionSettlement) => void = () => {},
-		startClient: StartClient = () => NonoClient.start(nonoPath, bwrapPath),
+		onSettled: (settlement: ProcessSessionSnapshot) => void = () => {},
 	) {
+		this.#client = client;
 		this.#sourceEnvironment = sourceEnvironment;
 		this.#onSettled = onSettled;
-		this.#startClient = startClient;
 	}
 
 	readonly startEffect = Effect.fn("NativeProcessSessions.start")(function* (
 		this: NativeProcessSessions,
 		options: StartProcessSessionOptions,
 	) {
-		if (this.#closed) return yield* Effect.fail(sessionError("process sessions are shut down"));
+		if (this.#closed) return yield* Effect.fail(new Error("process sessions are shut down"));
 		this.#pruneSettled();
 		if (this.#sessions.size >= MAX_SESSIONS) {
-			return yield* Effect.fail(sessionError(`process session limit reached: ${MAX_SESSIONS}`));
+			return yield* Effect.fail(new Error(`process session limit reached: ${MAX_SESSIONS}`));
 		}
 
 		const manager = this;
@@ -130,38 +112,27 @@ export class NativeProcessSessions {
 				options.localPorts,
 				manager.#sourceEnvironment,
 			),
-			catch: sessionError,
+			catch: processError,
 		});
 		request.interactive = true;
-		const client = yield* Effect.tryPromise({ try: manager.#startClient, catch: sessionError });
-		if (this.#closed) {
-			yield* Effect.promise(() => client.shutdown());
-			return yield* Effect.fail(sessionError("process sessions are shut down"));
-		}
-		const started = yield* Deferred.make<void, NativeProcessSessionError>();
+		const started = yield* Deferred.make<void, Error>();
 		const session = {
 			id,
-			client,
 			output: Buffer.alloc(0),
 			outputStart: 0,
 			totalOutput: 0,
 			deliveredOutput: 0,
-			startedAt: new Date(),
 			stopped: false,
 			detached: false,
 			observers: 0,
-			notified: false,
 			listeners: new Set<() => void>(),
 		} as NativeSession;
 
 		const run = Effect.gen(function* () {
-			const exit = yield* Effect.exit(client.execEffect(
+			const exit = yield* Effect.exit(manager.#client.execEffect(
 				request,
 				(data) => manager.#appendOutput(session, data),
-				(pid) => {
-					session.pid = pid;
-					Deferred.doneUnsafe(started, Effect.void);
-				},
+				() => Deferred.doneUnsafe(started, Effect.void),
 			));
 			if (Exit.isSuccess(exit)) {
 				session.result = exit.value;
@@ -170,18 +141,18 @@ export class NativeProcessSessions {
 					if (summary) manager.#appendOutput(session, Buffer.from(summary));
 				}
 			} else if (!session.stopped) {
-				const cause = Cause.squash(exit.cause);
-				session.error = cause instanceof Error ? cause.message : String(cause);
-				Deferred.doneUnsafe(started, Effect.fail(sessionError(cause)));
+				const error = processError(Cause.squash(exit.cause));
+				session.error = error.message;
+				Deferred.doneUnsafe(started, Effect.fail(error));
 			}
 			manager.#wake(session);
-			if (session.pid !== undefined) manager.#notifyIfUnobserved(session);
+			manager.#notifyIfUnobserved(session);
 		}).pipe(
 			Effect.onExit(() => Effect.sync(() => {
 				if (!Deferred.isDoneUnsafe(started)) {
-					Deferred.doneUnsafe(started, Effect.fail(sessionError("process ended before starting")));
+					Deferred.doneUnsafe(started, Effect.fail(new Error("process ended before starting")));
 				}
-			}).pipe(Effect.andThen(Effect.promise(() => client.shutdown())))),
+			})),
 			Effect.catchCause(() => Effect.void),
 		);
 		session.fiber = yield* Effect.forkIn(run, this.#scope);
@@ -223,11 +194,9 @@ export class NativeProcessSessions {
 		session.observers += 1;
 		try {
 			const baseline = session.totalOutput;
-			if (options.input !== undefined) {
-				session.client.writeStdin(`process/${id}`, Buffer.from(options.input));
-			}
-			if (options.closeStdin) session.client.closeStdin(`process/${id}`);
-			if (options.signal) session.client.signal(`process/${id}`, `SIG${options.signal}`);
+			if (options.input !== undefined) this.#client.writeStdin(`process/${id}`, Buffer.from(options.input));
+			if (options.closeStdin) this.#client.closeStdin(`process/${id}`);
+			if (options.signal) this.#client.signal(`process/${id}`, `SIG${options.signal}`);
 			if (session.deliveredOutput >= session.totalOutput) {
 				await this.#wait(
 					session,
@@ -274,8 +243,7 @@ export class NativeProcessSessions {
 
 	#snapshot(session: NativeSession, consume: boolean): ProcessSessionSnapshot {
 		const start = Math.max(session.deliveredOutput, session.outputStart);
-		const relativeStart = start - session.outputStart;
-		let output = session.output.subarray(relativeStart).toString("utf8");
+		let output = session.output.subarray(start - session.outputStart).toString("utf8");
 		if (session.deliveredOutput < session.outputStart) {
 			output = `[Process output truncated before delivery]\n${output}`;
 		}
@@ -292,10 +260,6 @@ export class NativeProcessSessions {
 		};
 	}
 
-	#settlement(session: NativeSession): ProcessSessionSettlement {
-		return this.#snapshot(session, false);
-	}
-
 	#state(session: NativeSession): ProcessSessionState {
 		if (session.stopped) return "stopped";
 		if (session.error) return "failed";
@@ -304,9 +268,8 @@ export class NativeProcessSessions {
 	}
 
 	#notifyIfUnobserved(session: NativeSession): void {
-		if (!session.detached || session.observers > 0 || session.notified) return;
-		session.notified = true;
-		try { this.#onSettled(this.#settlement(session)); } catch { /* Notification cannot corrupt process state. */ }
+		if (!session.detached || session.observers > 0) return;
+		try { this.#onSettled(this.#snapshot(session, false)); } catch { /* Notification cannot corrupt process state. */ }
 	}
 
 	#wake(session: NativeSession): void {

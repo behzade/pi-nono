@@ -184,7 +184,7 @@ export default function (pi: ExtensionAPI) {
 				if (snapshot.state === "failed" || snapshot.state === "exited") throw new Error(output);
 				return { content: [{ type: "text", text: output }], details: processSessionDetails(snapshot) };
 			}
-			if (sandboxState.kind === "disabled") return localBash.execute(id, params, signal, onUpdate, ctx);
+			if (sandboxState.kind === "disabled") return localBash.execute(id, params, signal, onUpdate);
 			if (sandboxState.kind !== "ready") throw new Error(sandboxState.kind === "failed" ? sandboxState.reason : "Sandbox is still initializing; command blocked");
 			if (!nonoClient) throw new Error("Nono sandbox is not ready");
 			const policyAtStart = synchronizeAccess();
@@ -200,7 +200,7 @@ export default function (pi: ExtensionAPI) {
 					revalidatePermissions: () => activeAccess().revalidate(policyAtStart).filesystem,
 				},
 			);
-			return createBashTool(localCwd, { operations }).execute(id, params, signal, onUpdate, ctx);
+			return createBashTool(localCwd, { operations }).execute(id, params, signal, onUpdate);
 		},
 	});
 
@@ -311,8 +311,7 @@ export default function (pi: ExtensionAPI) {
 			if (generation !== sessionGeneration) { await client.shutdown(); return; }
 			nonoClient = client;
 			processSessions = new NativeProcessSessions(
-				nonoPath,
-				packagedExecutables.bwrapPath,
+				client,
 				sessionEnvironment,
 				(settlement) => {
 					if (generation === sessionGeneration) notifyProcessSettlement(pi, settlement);
