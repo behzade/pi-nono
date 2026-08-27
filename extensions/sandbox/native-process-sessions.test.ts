@@ -104,6 +104,25 @@ test("only detached, unobserved completion sends a notification", async () => {
 	}
 });
 
+test("process continuation without yield_ms waits for output or completion", async () => {
+	const client = new FakeProcessClient();
+	const manager = new NativeProcessSessions(client, process.env);
+	try {
+		const id = await manager.start(startOptions());
+		const waiting = manager.continue(id, {});
+		const early = await Promise.race([
+			waiting.then(() => "returned"),
+			new Promise<string>((resolve) => setTimeout(() => resolve("waiting"), 20)),
+		]);
+		assert.equal(early, "waiting");
+
+		client.finish();
+		assert.deepEqual(await waiting, { id, state: "completed", output: "", exitCode: 0 });
+	} finally {
+		await manager.shutdown();
+	}
+});
+
 test("completion returned by process does not also notify", async () => {
 	const client = new FakeProcessClient();
 	const notifications: unknown[] = [];

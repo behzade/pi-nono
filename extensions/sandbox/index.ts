@@ -129,7 +129,7 @@ export default function (pi: ExtensionAPI) {
 		name: "process",
 		label: "Process session",
 		description:
-			"Continue a sandboxed process session returned by bash. With no mutation, wait for new output or completion. Optionally write stdin, close stdin, or signal the process group before waiting. Existing sessions keep the immutable policy captured by bash.",
+			"Continue a sandboxed process session returned by bash. With no mutation, wait for new output or completion; omit yield_ms to wait without a deadline. Optionally write stdin, close stdin, or signal the process group before waiting. Existing sessions keep the immutable policy captured by bash.",
 		promptSnippet:
 			"Continue a yielded bash process by waiting, writing or closing stdin, or sending INT, TERM, or KILL. Completion wakes the agent automatically; do not poll.",
 		parameters: ProcessParams,
@@ -141,7 +141,7 @@ export default function (pi: ExtensionAPI) {
 					...(params.input === undefined ? {} : { input: params.input }),
 					...(params.close_stdin === undefined ? {} : { closeStdin: params.close_stdin }),
 					...(params.signal === undefined ? {} : { signal: params.signal }),
-					yieldMs: params.yield_ms ?? 1000,
+					...(params.yield_ms === undefined ? {} : { yieldMs: params.yield_ms }),
 				}, signal);
 				return {
 					content: [{ type: "text", text: formatProcessSnapshot(snapshot) }],

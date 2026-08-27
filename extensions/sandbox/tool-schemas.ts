@@ -39,7 +39,7 @@ export const RequestAccessParams = Type.Object(
 );
 
 const YieldMilliseconds = Type.Integer({
-	description: "How long to wait before returning a live process session",
+	description: "When set, how long to wait before returning a live process session",
 	minimum: 250,
 	maximum: 30_000,
 });

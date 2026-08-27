@@ -63,7 +63,7 @@ export interface ContinueProcessSessionOptions {
 	input?: string;
 	closeStdin?: boolean;
 	signal?: "INT" | "TERM" | "KILL";
-	yieldMs: number;
+	yieldMs?: number;
 }
 
 function processError(cause: unknown): Error {
@@ -279,7 +279,7 @@ export class NativeProcessSessions {
 	#wait(
 		session: NativeSession,
 		predicate: () => boolean,
-		yieldMs: number,
+		yieldMs: number | undefined,
 		signal?: AbortSignal,
 	): Promise<void> {
 		if (predicate()) return Promise.resolve();
@@ -294,7 +294,7 @@ export class NativeProcessSessions {
 			const check = () => { if (predicate()) finish(); };
 			const abort = () => { cleanup(); reject(new Error("aborted")); };
 			session.listeners.add(check);
-			timer = setTimeout(finish, yieldMs);
+			if (yieldMs !== undefined) timer = setTimeout(finish, yieldMs);
 			if (signal?.aborted) abort();
 			else signal?.addEventListener("abort", abort, { once: true });
 		});
