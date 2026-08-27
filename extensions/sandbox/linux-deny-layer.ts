@@ -6,8 +6,9 @@ import {
 	realpathSync,
 	statSync,
 	writeFileSync,
+	type Dirent,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import type {
 	SandboxExecRequest,
 	SandboxFilesystemDeny,
@@ -37,6 +38,7 @@ export function buildLinuxDenyLaunch(
 	request: SandboxExecRequest,
 	privateDirectory: string,
 ): LinuxDenyLaunch {
+	assertRepresentableGrantDenies(request);
 	const denies = concreteDenies(request.policy.denies);
 	const args = [
 		"--new-session",
@@ -94,10 +96,17 @@ function concreteDenies(denies: readonly SandboxFilesystemDeny[]): ConcreteDeny[
 	for (const deny of denies) {
 		const paths = deny.scope === "glob" ? expandGlob(deny.pattern) : [deny.pattern];
 		for (const lexicalPath of paths) {
-			if (!existsSync(lexicalPath)) continue;
-			const metadata = lstatSync(lexicalPath);
-			const path = metadata.isSymbolicLink() ? realpathSync(lexicalPath) : resolve(lexicalPath);
-			const directory = statSync(path).isDirectory();
+			const metadata = lstatIfAvailable(lexicalPath);
+			if (!metadata) continue;
+			let path: string;
+			let directory: boolean;
+			try {
+				path = metadata.isSymbolicLink() ? realpathSync(lexicalPath) : resolve(lexicalPath);
+				directory = statSync(path).isDirectory();
+			} catch (error) {
+				if (isMissing(error)) continue;
+				throw error;
+			}
 			const current = merged.get(path);
 			merged.set(path, {
 				path,
@@ -129,7 +138,14 @@ function expandGlob(pattern: string): string[] {
 	const pending = [root];
 	while (pending.length > 0) {
 		const directory = pending.pop() as string;
-		for (const entry of readdirSync(directory, { withFileTypes: true })) {
+		let entries: Dirent[];
+		try {
+			entries = readdirSync(directory, { withFileTypes: true });
+		} catch (error) {
+			if (isMissing(error)) continue;
+			throw error;
+		}
+		for (const entry of entries) {
 			const path = join(directory, entry.name);
 			if (matcher.test(path)) {
 				matches.push(path);
@@ -159,6 +175,57 @@ function globRegex(pattern: string): RegExp {
 		else source += character.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
 	}
 	return new RegExp(`${source}$`);
+}
+
+function assertRepresentableGrantDenies(request: SandboxExecRequest): void {
+	const writableTrees = request.policy.grants.filter((right) =>
+		right.access === "write" && right.scope === "tree");
+	for (const right of [...request.policy.base_rights, ...request.policy.grants]) {
+		if (right.scope === "tree" && /[?*[]/.test(right.path)) {
+			throw new Error(`Linux sandbox tree rights cannot contain glob characters: ${right.path}`);
+		}
+	}
+	for (const right of writableTrees) {
+		for (const deny of request.policy.denies) {
+			if (deny.access === "read") continue;
+			if (
+				deny.scope === "glob" &&
+				deny.pattern.startsWith(`${right.path}/**/`)
+			) {
+				throw new Error(`Linux cannot safely grant writes to ${right.path} while protecting future denied paths`);
+			}
+			if (
+				deny.scope !== "glob" &&
+				isPathInside(right.path, deny.pattern) &&
+				!existsSync(deny.pattern)
+			) {
+				throw new Error(`Linux cannot safely grant writes to ${right.path} because denied path is missing: ${deny.pattern}`);
+			}
+		}
+	}
+}
+
+function lstatIfAvailable(path: string): ReturnType<typeof lstatSync> | undefined {
+	try {
+		return lstatSync(path);
+	} catch (error) {
+		if (isMissing(error)) return undefined;
+		throw error;
+	}
+}
+
+function isMissing(error: unknown): boolean {
+	return Boolean(
+		error &&
+			typeof error === "object" &&
+			"code" in error &&
+			["ENOENT", "ENOTDIR"].includes(String(error.code)),
+	);
+}
+
+function isPathInside(root: string, path: string): boolean {
+	const rel = relative(root, path);
+	return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`));
 }
 
 function mergeAccess(

@@ -46,8 +46,8 @@
             node --test package-lock.test.mjs ${self}/packaging/npm/build-packages.test.mjs
             node --import ./test-setup.ts --test \
               approval-transport.test.ts \
-              background-jobs.test.ts \
-              development-caches.test.ts \
+              native-process-sessions.test.ts \
+              process-sessions.test.ts \
               io-permissions.test.ts \
               io-policy.test.ts \
               linux-deny-layer.test.ts \

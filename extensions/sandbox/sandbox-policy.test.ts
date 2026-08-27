@@ -1,14 +1,10 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { buildSandboxExecRequest } from "./sandbox-policy.ts";
 import { DEFAULT_CONFIG } from "./sandbox-config.ts";
-import {
-	developmentCacheRoot,
-	ensureDevelopmentCacheDirectories,
-} from "./development-caches.ts";
 import { canonicalize } from "./io-permissions.ts";
 
 const sourceEnvironment = Object.freeze({ ...process.env });
@@ -17,6 +13,7 @@ test("maps current base rights and command-local folder grants", () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pi-sandbox-policy-"));
 	const canonicalCwd = canonicalize(cwd);
 	const state = join(homedir(), ".local", "share", `issues-fixture-${process.pid}`);
+	mkdirSync(state, { recursive: true });
 	const request = buildSandboxExecRequest(
 		"one",
 		"issues search view=issue number=79",
@@ -45,16 +42,6 @@ test("maps current base rights and command-local folder grants", () => {
 				right.scope === "tree",
 		),
 	);
-	const cacheRoot = canonicalize(developmentCacheRoot());
-	assert.deepEqual(
-		request.policy.base_rights.find((right) => right.path === cacheRoot),
-		{
-			access: "write",
-			path: cacheRoot,
-			scope: "tree",
-			missing_path: existsSync(cacheRoot) ? "reject" : "create_tree",
-		},
-	);
 	const broadCacheRoots = [
 		canonicalize(join(homedir(), ".cargo")),
 		canonicalize(join(homedir(), ".npm")),
@@ -71,7 +58,7 @@ test("maps current base rights and command-local folder grants", () => {
 			access: "write",
 			path: state,
 			scope: "tree",
-			missing_path: "create_tree",
+			missing_path: "reject",
 		},
 	]);
 	assert.ok(
@@ -91,63 +78,6 @@ test("maps current base rights and command-local folder grants", () => {
 	assert.equal(
 		request.policy.denies.some(
 			(rule) => rule.pattern === join(cwd, ".env") && rule.scope !== "glob",
-		),
-		false,
-	);
-});
-
-test("native cache rights overlapping the workspace are omitted", () => {
-	const cwd = canonicalize(homedir());
-	const request = buildSandboxExecRequest(
-		"home-workspace",
-		"true",
-		cwd,
-		undefined,
-		DEFAULT_CONFIG,
-		[],
-		[],
-		[],
-		sourceEnvironment,
-	);
-	assert.equal(
-		request.policy.base_rights.some(
-			(right) => right.path === canonicalize(developmentCacheRoot()),
-		),
-		false,
-	);
-});
-
-test("native policy honors a configured development cache root", () => {
-	const cwd = mkdtempSync(join(tmpdir(), "pi-sandbox-policy-custom-"));
-	const config = {
-		...DEFAULT_CONFIG,
-		developmentCache: { root: ".cache/pi-sandbox-custom" },
-	};
-	ensureDevelopmentCacheDirectories(config.developmentCache);
-	const customRoot = canonicalize(developmentCacheRoot(config.developmentCache));
-	const request = buildSandboxExecRequest(
-		"custom-cache",
-		"true",
-		cwd,
-		undefined,
-		config,
-		[],
-		[],
-		[],
-		sourceEnvironment,
-	);
-
-	assert.equal(
-		request.policy.base_rights.some(
-			(right) => right.access === "write" && right.path === customRoot,
-		),
-		true,
-	);
-	assert.equal(
-		request.policy.base_rights.some(
-			(right) =>
-				right.access === "write" &&
-				right.path === canonicalize(developmentCacheRoot()),
 		),
 		false,
 	);

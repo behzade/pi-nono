@@ -6,7 +6,6 @@ import type {
 	SandboxFilesystemDeny,
 	SandboxFilesystemRight,
 } from "./sandbox-protocol.ts";
-import { developmentCacheWriteRightsForWorkspace } from "./development-caches.ts";
 import {
 	DEFAULT_CONFIG,
 	buildShellEnvironment,
@@ -15,6 +14,7 @@ import {
 } from "./sandbox-config.ts";
 import {
 	canonicalize,
+	isInside,
 	type IoPermission,
 	resolvePermissionPath,
 } from "./io-permissions.ts";
@@ -115,22 +115,6 @@ function baseRights(
 	cwd: string,
 ): SandboxFilesystemRight[] {
 	const rights = new Map<string, SandboxFilesystemRight>();
-	for (const cache of developmentCacheWriteRightsForWorkspace(
-		cwd,
-		config.developmentCache,
-	)) {
-		const right: SandboxFilesystemRight = {
-			access: "write",
-			path: cache.path,
-			scope: cache.directory ? "tree" : "file",
-			missing_path: existsSync(cache.path)
-				? "reject"
-				: cache.directory
-					? "create_tree"
-					: "create_file",
-		};
-		rights.set(`write:${right.path}:${right.scope}`, right);
-	}
 	for (const entry of config.filesystem?.allowRead ?? []) {
 		const right = configRight("read", entry, cwd);
 		if (right) rights.set(`read:${right.path}:${right.scope}`, right);
@@ -176,11 +160,7 @@ function permissionRight(permission: NativeFilePermission): SandboxFilesystemRig
 		access: permission.kind,
 		path: permission.path,
 		scope: permission.directory ? "tree" : "file",
-		missing_path: existsSync(permission.path)
-			? "reject"
-			: permission.directory
-				? "create_tree"
-				: "create_file",
+		missing_path: "reject",
 	};
 }
 
@@ -205,6 +185,24 @@ function denyRules(
 						? "read_write"
 						: current?.access ?? access,
 			});
+		}
+	}
+	const actualCwd = canonicalize(cwd);
+	const excludedDynamicRoots = [actualCwd, canonicalize(tmpdir()), canonicalize("/tmp")];
+	const externalTrees = new Set([
+		...baseRights(config, cwd)
+			.filter((right) => right.scope === "tree")
+			.map((right) => right.path),
+		...permissions.filter((permission) => permission.directory).map((permission) => permission.path),
+	].filter((root) => !excludedDynamicRoots.some((excluded) => isInside(excluded, root))));
+	for (const root of externalTrees) {
+		for (const suffix of ["**/.env", "**/.env.*", "**/*.pem", "**/*.key"]) {
+			const deny: SandboxFilesystemDeny = {
+				access: "read_write",
+				pattern: `${root}/${suffix}`,
+				scope: "glob",
+			};
+			rules.set(`${deny.pattern}:${deny.scope}`, deny);
 		}
 	}
 	return [...rules.values()].filter((deny) => !permissions.some((permission) =>

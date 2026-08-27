@@ -1,10 +1,4 @@
 import { isIP } from "node:net";
-import {
-	DEFAULT_DEVELOPMENT_CACHE_CONFIG,
-	developmentCacheEnvironment,
-	type DevelopmentCacheConfig,
-	normalizeDevelopmentCacheConfig,
-} from "./development-caches.ts";
 import { normalizeNetworkHost } from "./io-permissions.ts";
 
 export interface NativeSandboxNetworkConfig {
@@ -35,7 +29,6 @@ export interface NativeSandboxShellEnvironmentConfig {
 export interface NativeSandboxConfig {
 	enabled?: boolean;
 	backend?: "nono";
-	developmentCache?: DevelopmentCacheConfig;
 	network?: NativeSandboxNetworkConfig;
 	filesystem?: NativeSandboxFilesystemConfig;
 	shellEnvironment?: NativeSandboxShellEnvironmentConfig;
@@ -47,7 +40,6 @@ export const DEFAULT_CONFIG: Required<
 	NativeSandboxConfig = {
 	enabled: true,
 	backend: "nono",
-	developmentCache: DEFAULT_DEVELOPMENT_CACHE_CONFIG,
 	network: {
 		enabled: true,
 		allowedDomains: [],
@@ -61,7 +53,7 @@ export const DEFAULT_CONFIG: Required<
 			"~/.ssh",
 			"~/.aws",
 			"~/.gnupg",
-			"~/.config/guardian",
+			"~/.config/pi-nono",
 			"~/.pi/agent/auth.json",
 			"~/.codex/auth.json",
 			"**/.env",
@@ -71,13 +63,12 @@ export const DEFAULT_CONFIG: Required<
 		allowWrite: [".", ":tmpdir", ":slash_tmp"],
 		denyWrite: [
 			".git",
-			".guardian",
 			".pi",
 			"**/.env",
 			"**/.env.*",
 			"**/*.pem",
 			"**/*.key",
-			"~/.config/guardian",
+			"~/.config/pi-nono",
 			"~/.pi",
 			"~/.codex",
 		],
@@ -243,7 +234,6 @@ export function normalizeConfig(value: unknown): NativeSandboxConfig {
 		[
 			"enabled",
 			"backend",
-			"developmentCache",
 			"network",
 			"filesystem",
 			"shellEnvironment",
@@ -338,7 +328,6 @@ export function normalizeConfig(value: unknown): NativeSandboxConfig {
 	return {
 		enabled: enabled as boolean | undefined,
 		backend: backend as "nono" | undefined,
-		developmentCache: normalizeDevelopmentCacheConfig(input.developmentCache),
 		network: networkInput
 			? {
 					enabled: networkInput.enabled as boolean | undefined,
@@ -392,14 +381,6 @@ export function mergeGlobalConfig(
 	return {
 		...defaults,
 		...defined(override),
-		developmentCache: {
-			...defaults.developmentCache,
-			...defined(override.developmentCache),
-			environment: {
-				...(defaults.developmentCache?.environment ?? {}),
-				...(override.developmentCache?.environment ?? {}),
-			},
-		},
 		network: { ...defaults.network, ...defined(override.network) },
 		filesystem: {
 			...defaults.filesystem,
@@ -501,9 +482,5 @@ export function buildShellEnvironment(
 			if (!matchesAny(name, policy.includeOnly ?? [])) delete environment[name];
 		}
 	}
-	Object.assign(
-		environment,
-		developmentCacheEnvironment(effectiveConfig.developmentCache),
-	);
 	return environment;
 }

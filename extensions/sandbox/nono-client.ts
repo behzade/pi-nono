@@ -82,10 +82,29 @@ export class NonoClient {
 	): Promise<SandboxExecResult> {
 		if (this.#closed) return Promise.reject(new Error("nono sandbox client is closed"));
 		if (this.#pending.has(request.id)) return Promise.reject(new Error(`Duplicate command ID: ${request.id}`));
-		const profileDirectory = mkdtempSync(join(tmpdir(), ".guardian-nono-"));
+		const profileDirectory = mkdtempSync(join(tmpdir(), ".pi-nono-"));
 		const profilePath = join(profileDirectory, "profile.json");
+		const nonoArgs = [
+			"--silent",
+			"run",
+			"--profile",
+			profilePath,
+			"--",
+			request.command.program,
+			...request.command.args,
+		];
+		let launch: { program: string; args: string[] };
 		try {
 			prepareMissingRights([...request.policy.base_rights, ...request.policy.grants]);
+			launch = process.platform === "linux"
+				? buildLinuxDenyLaunch(
+						this.#bwrapPath,
+						this.#path,
+						nonoArgs,
+						request,
+						profileDirectory,
+					)
+				: { program: this.#path, args: nonoArgs };
 			writeFileSync(profilePath, `${JSON.stringify(buildNonoProfile(request), null, 2)}\n`, {
 				mode: 0o600,
 				flag: "wx",
@@ -96,24 +115,6 @@ export class NonoClient {
 		}
 
 		return new Promise((resolve, reject) => {
-			const nonoArgs = [
-				"--silent",
-				"run",
-				"--profile",
-				profilePath,
-				"--",
-				request.command.program,
-				...request.command.args,
-			];
-			const launch = process.platform === "linux"
-				? buildLinuxDenyLaunch(
-						this.#bwrapPath,
-						this.#path,
-						nonoArgs,
-						request,
-						profileDirectory,
-					)
-				: { program: this.#path, args: nonoArgs };
 			const child = spawn(launch.program, launch.args, {
 				cwd: request.cwd,
 				env: request.env,
@@ -128,6 +129,7 @@ export class NonoClient {
 				truncated: false,
 			};
 			this.#pending.set(request.id, pending);
+			child.stdin?.on("error", () => { /* Process closed stdin between interaction and write. */ });
 			let timedOut = false;
 			let cancelled = false;
 			const timeout = request.timeout_ms === null
@@ -174,8 +176,20 @@ export class NonoClient {
 
 	writeStdin(id: string, data: Buffer): void {
 		const pending = this.#pending.get(id);
-		if (!pending?.child.stdin?.writable) throw new Error(`Command is not running: ${id}`);
+		if (!pending?.child.stdin?.writable) throw new Error(`Command stdin is not writable: ${id}`);
 		pending.child.stdin.write(data);
+	}
+
+	closeStdin(id: string): void {
+		const pending = this.#pending.get(id);
+		if (!pending?.child.stdin?.writable) throw new Error(`Command stdin is not writable: ${id}`);
+		pending.child.stdin.end();
+	}
+
+	signal(id: string, signal: "SIGINT" | "SIGTERM" | "SIGKILL"): void {
+		const pending = this.#pending.get(id);
+		if (!pending) throw new Error(`Command is not running: ${id}`);
+		killGroup(pending.child, signal);
 	}
 
 	cancel(id: string): void {
@@ -210,16 +224,7 @@ export function buildNonoProfile(
 		? ["/Library/Keychains/System.keychain"]
 		: [];
 	const protectionBypassFiles = [...runtimeConfigFiles, ...runtimeTrustFiles];
-	// Nono's portable `deny` blocks reads too. Linux mounts this fixed control
-	// root read-only; macOS needs an exact Seatbelt write deny instead.
-	const guardianWriteDeny = platform === "darwin"
-		? request.policy.denies.find((deny) =>
-				deny.access === "write" &&
-				deny.scope === "tree" &&
-				deny.pattern === join(request.cwd, ".guardian")
-			)
-		: undefined;
-	const seatbeltDenies = request.policy.denies.filter((deny) => deny !== guardianWriteDeny);
+	const seatbeltDenies = request.policy.denies;
 	const filesystem = {
 		allow: rightPaths(rights, "write", "tree"),
 		read: [...new Set([
@@ -258,13 +263,6 @@ export function buildNonoProfile(
 			description: "Ephemeral profile generated from a validated pi-nono policy snapshot",
 		},
 		filesystem,
-		...(guardianWriteDeny
-			? {
-					unsafe_macos_seatbelt_rules: [
-						`(deny file-write* (subpath ${JSON.stringify(guardianWriteDeny.pattern)}))`,
-					],
-				}
-			: {}),
 		network: {
 			block: allowedHosts.length === 0,
 			allow_domain: allowedHosts,

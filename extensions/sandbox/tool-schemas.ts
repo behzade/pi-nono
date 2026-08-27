@@ -28,17 +28,6 @@ const AccessRightParams = Type.Union([
 		},
 		{ additionalProperties: false },
 	),
-	Type.Object(
-		{
-			kind: Type.Literal("development_cache"),
-			environment: Type.Record(
-				Type.String({ pattern: "^[A-Za-z_][A-Za-z0-9_]*$", maxLength: 64 }),
-				Type.String({ maxLength: 256 }),
-				{ minProperties: 1, maxProperties: 16 },
-			),
-		},
-		{ additionalProperties: false },
-	),
 ]);
 
 export const RequestAccessParams = Type.Object(
@@ -49,75 +38,36 @@ export const RequestAccessParams = Type.Object(
 	{ additionalProperties: false },
 );
 
+const YieldMilliseconds = Type.Integer({
+	description: "How long to wait before returning a live process session",
+	minimum: 250,
+	maximum: 30_000,
+});
+
 export const BashParams = Type.Object(
 	{
 		command: Type.String({ description: "Bash command to execute" }),
-		timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (optional, no default timeout)" })),
-	},
-	{ additionalProperties: false },
-);
-
-const BackgroundJobAction = Type.Union([
-	Type.Literal("start"),
-	Type.Literal("list"),
-	Type.Literal("status"),
-	Type.Literal("read"),
-	Type.Literal("write"),
-	Type.Literal("line"),
-	Type.Literal("keys"),
-	Type.Literal("stop"),
-]);
-
-export const BackgroundJobParams = Type.Object(
-	{
-		action: BackgroundJobAction,
-		name: Type.Optional(Type.String({ description: "Required for every action except list; must start with pi-" })),
-		command: Type.Optional(Type.String({ description: "Required when action is start" })),
-		cwd: Type.Optional(Type.String({ description: "Working directory inside this workspace; only used by start" })),
-		lines: Type.Optional(Type.Integer({ description: "Only used by read", minimum: 1, maximum: 10_000 })),
-		text: Type.Optional(Type.String({ description: "Required when action is write or line" })),
-		keys: Type.Optional(Type.Array(Type.String(), {
-			description: "Required when action is keys",
-			minItems: 1,
-			maxItems: 20,
+		timeout: Type.Optional(Type.Number({
+			description: "Hard timeout in seconds (optional, no default timeout)",
+			exclusiveMinimum: 0,
+			maximum: 86_400,
 		})),
+		yield_ms: Type.Optional(YieldMilliseconds),
 	},
 	{ additionalProperties: false },
 );
 
-export type BackgroundJobInput =
-	| { action: "start"; name: string; command: string; cwd?: string }
-	| { action: "list" }
-	| { action: "status" | "stop"; name: string }
-	| { action: "read"; name: string; lines?: number }
-	| { action: "write" | "line"; name: string; text: string }
-	| { action: "keys"; name: string; keys: string[] };
-
-export function validateBackgroundJobParams(params: {
-	action: BackgroundJobInput["action"];
-	name?: string;
-	command?: string;
-	cwd?: string;
-	lines?: number;
-	text?: string;
-	keys?: string[];
-}): BackgroundJobInput | string {
-	if (params.action === "list") return { action: "list" };
-	if (params.name === undefined) return `Background job action ${params.action} requires name.`;
-	if (params.action === "start") {
-		if (params.command === undefined) return "Background job action start requires command.";
-		return { action: "start", name: params.name, command: params.command, ...(params.cwd === undefined ? {} : { cwd: params.cwd }) };
-	}
-	if (params.action === "read") {
-		return { action: "read", name: params.name, ...(params.lines === undefined ? {} : { lines: params.lines }) };
-	}
-	if (params.action === "write" || params.action === "line") {
-		if (params.text === undefined) return `Background job action ${params.action} requires text.`;
-		return { action: params.action, name: params.name, text: params.text };
-	}
-	if (params.action === "keys") {
-		if (params.keys === undefined) return "Background job action keys requires keys.";
-		return { action: "keys", name: params.name, keys: params.keys };
-	}
-	return { action: params.action, name: params.name };
-}
+export const ProcessParams = Type.Object(
+	{
+		id: Type.String({ description: "Process session ID returned by bash", minLength: 1 }),
+		input: Type.Optional(Type.String({ description: "Bytes to write to stdin before waiting" })),
+		close_stdin: Type.Optional(Type.Boolean({ description: "Close stdin after writing input, if any" })),
+		signal: Type.Optional(Type.Union([
+			Type.Literal("INT"),
+			Type.Literal("TERM"),
+			Type.Literal("KILL"),
+		], { description: "Signal the process group before waiting" })),
+		yield_ms: Type.Optional(YieldMilliseconds),
+	},
+	{ additionalProperties: false },
+);

@@ -2,7 +2,6 @@ import { existsSync, lstatSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, normalize, relative, resolve, sep } from "node:path";
 import type { NativeSandboxConfig } from "./sandbox-config.ts";
-import { normalizeDevelopmentCacheConfig } from "./development-caches.ts";
 import {
 	canonicalize,
 	gitControlRoot,
@@ -33,12 +32,11 @@ export type ProjectAccessRight =
 	| { kind: "network_host"; host: string }
 	| { kind: "network_endpoint"; host: string; port: number };
 
-export type ProjectAccessRequest = ProjectAccessRight | { kind: "development_cache"; environment: Record<string, string> };
+export type ProjectAccessRequest = ProjectAccessRight;
 
 export interface ProjectSandboxPolicy {
 	version: 1;
 	rights: ProjectAccessRight[];
-	developmentCache?: { environment: Record<string, string> };
 }
 
 export interface ActiveProjectPolicy {
@@ -47,6 +45,7 @@ export interface ActiveProjectPolicy {
 	networkHosts: string[];
 	localPorts: number[];
 	config: NativeSandboxConfig;
+	inactive: string[];
 	/** Exact file bytes loaded or written by the trusted host; null means absent. */
 	sourceText: string | null;
 }
@@ -56,11 +55,17 @@ export function loadProjectPolicy(
 	cwd: string,
 	globalConfig: NativeSandboxConfig,
 ): ActiveProjectPolicy {
-	const sourceText = readProjectPolicySource(cwd);
-	const policy = sourceText === null
-		? structuredClone(EMPTY_PROJECT_POLICY)
-		: normalizeProjectPolicy(JSON.parse(sourceText));
-	return activateProjectPolicy(policy, cwd, globalConfig, sourceText);
+	try {
+		const source = readProjectPolicySource(cwd);
+		if (source === null) {
+			return activateProjectPolicy(structuredClone(EMPTY_PROJECT_POLICY), cwd, globalConfig);
+		}
+		const active = activateStoredAccessPolicy(source.policy, cwd, globalConfig, source.sourceText, false);
+		if (source.error) active.inactive.unshift(`Project grants ignored: ${source.error}`);
+		return active;
+	} catch (error) {
+		return inactiveEmptyPolicy(cwd, globalConfig, `Project grants ignored: ${errorMessage(error)}`);
+	}
 }
 
 export function loadProjectPolicyForUpdate(
@@ -91,6 +96,15 @@ export function activateSessionPolicy(
 	return activateAccessPolicy(policy, cwd, globalConfig, sourceText, true);
 }
 
+export function activateStoredSessionPolicy(
+	value: unknown,
+	cwd: string,
+	globalConfig: NativeSandboxConfig,
+	sourceText: string | null = null,
+): ActiveProjectPolicy {
+	return activateStoredAccessPolicy(value, cwd, globalConfig, sourceText, true);
+}
+
 function activateAccessPolicy(
 	policy: ProjectSandboxPolicy,
 	cwd: string,
@@ -98,42 +112,72 @@ function activateAccessPolicy(
 	sourceText: string | null,
 	allowAbsolutePaths: boolean,
 ): ActiveProjectPolicy {
-	const normalized = normalizeAccessPolicy(policy, allowAbsolutePaths);
-	const config = withProjectCacheEnvironment(globalConfig, normalized);
+	return activateNormalizedPolicy(
+		normalizeAccessPolicy(policy, allowAbsolutePaths),
+		cwd,
+		globalConfig,
+		sourceText,
+	);
+}
+
+function activateStoredAccessPolicy(
+	value: unknown,
+	cwd: string,
+	globalConfig: NativeSandboxConfig,
+	sourceText: string | null,
+	allowAbsolutePaths: boolean,
+): ActiveProjectPolicy {
+	const { policy, inactive } = normalizeStoredPolicy(value, allowAbsolutePaths);
+	return activateNormalizedPolicy(policy, cwd, globalConfig, sourceText, inactive);
+}
+
+function activateNormalizedPolicy(
+	policy: ProjectSandboxPolicy,
+	cwd: string,
+	config: NativeSandboxConfig,
+	sourceText: string | null,
+	inactive?: string[],
+): ActiveProjectPolicy {
+	const activeRights: ProjectAccessRight[] = [];
 	const filesystem: IoPermission[] = [];
 	const networkHosts = new Set<string>();
 	const localPorts = new Set<number>();
-	for (const right of normalized.rights) {
-		if (right.kind === "network_endpoint") {
-			if (config.network?.enabled === false) {
-				throw new Error(`${right.host}:${right.port} is denied because network access is disabled by machine policy`);
+	for (const right of policy.rights) {
+		try {
+			if (right.kind === "network_endpoint") {
+				assertNetworkEndpointAllowed(right, config);
+				localPorts.add(right.port);
+			} else if (right.kind === "network_host") {
+				assertNetworkHostAllowed(right, config);
+				networkHosts.add(right.host);
+			} else {
+				filesystem.push(activateFilesystemRight(right, cwd, config));
 			}
-			if ((config.network?.deniedDomains ?? []).some((rule) => networkRuleMatches(rule, right.host))) {
-				throw new Error(`${right.host}:${right.port} is denied by the machine sandbox policy`);
-			}
-			localPorts.add(right.port);
-			continue;
+			activeRights.push(right);
+		} catch (error) {
+			if (!inactive) throw error;
+			inactive.push(`${rightLabel(right)}: ${errorMessage(error)}`);
 		}
-		if (right.kind === "network_host") {
-			if (config.network?.enabled === false) {
-				throw new Error(`${right.host} is denied because network access is disabled by machine policy`);
-			}
-			if ((config.network?.deniedDomains ?? []).some((rule) => networkRuleMatches(rule, right.host))) {
-				throw new Error(`${right.host} is denied by the machine sandbox policy`);
-			}
-			networkHosts.add(right.host);
-			continue;
-		}
-		filesystem.push(activateFilesystemRight(right, cwd, config));
 	}
 	return {
-		policy: normalized,
+		policy: { version: 1, rights: activeRights },
 		filesystem,
 		networkHosts: [...networkHosts].sort(),
 		localPorts: [...localPorts].sort((left, right) => left - right),
 		config,
+		inactive: inactive ?? [],
 		sourceText,
 	};
+}
+
+function inactiveEmptyPolicy(
+	cwd: string,
+	globalConfig: NativeSandboxConfig,
+	message: string,
+): ActiveProjectPolicy {
+	const active = activateProjectPolicy(EMPTY_PROJECT_POLICY, cwd, globalConfig);
+	active.inactive.push(message);
+	return active;
 }
 
 export function addProjectAccess(
@@ -164,42 +208,8 @@ function addAccess(
 	if (requests.length === 0) throw new Error("request_access needs at least one access request");
 	if (requests.length > 32) throw new Error("request_access accepts at most 32 access requests");
 
-	const requestedRights: ProjectAccessRight[] = [];
-	const requestedEnvironment: Record<string, string> = {};
-	for (const request of requests) {
-		if (request.kind === "development_cache") {
-			const entries = Object.entries(request.environment);
-			if (entries.length === 0 || entries.length > 16) {
-				throw new Error("Each development_cache request must contain 1 to 16 environment mappings");
-			}
-			if (entries.some(([name]) => name.length > 64)) {
-				throw new Error("Development cache environment names must be at most 64 characters");
-			}
-			if (entries.some(([, target]) => typeof target === "string" && target.length > 256)) {
-				throw new Error("Development cache targets must be at most 256 characters");
-			}
-			const cache = normalizeDevelopmentCacheConfig({ environment: request.environment });
-			for (const [name, target] of Object.entries(cache?.environment ?? {})) {
-				const managed = globalConfig.developmentCache?.environment?.[name];
-				if (managed !== undefined) {
-					if (managed !== target) {
-						throw new Error(`request_access cannot replace managed cache mapping ${name}`);
-					}
-					continue;
-				}
-				const existing = current.developmentCache?.environment[name];
-				if (existing !== undefined && existing !== target) {
-					throw new Error(`request_access cannot replace existing project cache mapping ${name}`);
-				}
-				requestedEnvironment[name] = target;
-			}
-			if (Object.keys(requestedEnvironment).length > 32) {
-				throw new Error("request_access accepts at most 32 net development-cache mappings");
-			}
-			continue;
-		}
-		requestedRights.push(normalizeRequestedRight(request, cwd, allowAbsolutePaths));
-	}
+	const requestedRights = requests.map((request) =>
+		normalizeRequestedRight(request, cwd, allowAbsolutePaths));
 
 	const currentNormalized = normalizeAccessPolicy(current, allowAbsolutePaths);
 	const currentKeys = new Set(currentNormalized.rights.map(rightKey));
@@ -208,29 +218,13 @@ function addAccess(
 	).values()];
 	const netNewRights = uniqueRequestedRights.filter((right) => !currentKeys.has(rightKey(right)));
 	assertNoGiantSiblingFileList(netNewRights);
-	const environment = {
-		...(currentNormalized.developmentCache?.environment ?? {}),
-		...requestedEnvironment,
-	};
 	const candidate = normalizeAccessPolicy({
 		...currentNormalized,
 		rights: [...currentNormalized.rights, ...netNewRights],
-		...(Object.keys(environment).length > 0
-			? { developmentCache: { environment } }
-			: {}),
 	}, allowAbsolutePaths);
 	return allowAbsolutePaths
 		? activateSessionPolicy(candidate, cwd, globalConfig)
 		: activateProjectPolicy(candidate, cwd, globalConfig);
-}
-
-export function addProjectRights(
-	current: ProjectSandboxPolicy,
-	rights: readonly ProjectAccessRight[],
-	cwd: string,
-	globalConfig: NativeSandboxConfig,
-): ActiveProjectPolicy {
-	return addProjectAccess(current, rights, cwd, globalConfig);
 }
 
 export function requestsRequireSessionScope(
@@ -252,13 +246,8 @@ export function saveProjectPolicy(
 	policy: ProjectSandboxPolicy,
 	expectedSourceText?: string | null,
 ): string {
-	const sourceText = serializeProjectPolicy(policy);
-	writeProjectPolicySource(cwd, sourceText, expectedSourceText);
-	return sourceText;
-}
-
-export function serializeProjectPolicy(policy: ProjectSandboxPolicy): string {
-	return `${JSON.stringify(normalizeProjectPolicy(policy), null, 2)}\n`;
+	const normalized = normalizeProjectPolicy(policy);
+	return writeProjectPolicySource(cwd, normalized, expectedSourceText);
 }
 
 export function sameProjectPolicy(
@@ -271,24 +260,8 @@ export function sameProjectPolicy(
 export function mergeAccessPolicies(
 	...policies: readonly ProjectSandboxPolicy[]
 ): ProjectSandboxPolicy {
-	const rights: ProjectAccessRight[] = [];
-	const environment: Record<string, string> = {};
-	for (const policy of policies) {
-		const normalized = normalizeSessionPolicy(policy);
-		rights.push(...normalized.rights);
-		for (const [name, target] of Object.entries(normalized.developmentCache?.environment ?? {})) {
-			const existing = environment[name];
-			if (existing !== undefined && existing !== target) {
-				throw new Error(`Sandbox access policies contain conflicting development-cache mapping ${name}`);
-			}
-			environment[name] = target;
-		}
-	}
-	return normalizeSessionPolicy({
-		version: 1,
-		rights,
-		...(Object.keys(environment).length > 0 ? { developmentCache: { environment } } : {}),
-	});
+	const rights = policies.flatMap((policy) => normalizeSessionPolicy(policy).rights);
+	return normalizeSessionPolicy({ version: 1, rights });
 }
 
 export function accessPolicyAdditions(
@@ -299,25 +272,7 @@ export function accessPolicyAdditions(
 	const afterNormalized = normalizeSessionPolicy(after);
 	const beforeRights = new Set(beforeNormalized.rights.map(rightKey));
 	const rights = afterNormalized.rights.filter((right) => !beforeRights.has(rightKey(right)));
-	const previousEnvironment = beforeNormalized.developmentCache?.environment ?? {};
-	const environment = Object.fromEntries(
-		Object.entries(afterNormalized.developmentCache?.environment ?? {})
-			.filter(([name, target]) => previousEnvironment[name] !== target),
-	);
-	return normalizeSessionPolicy({
-		version: 1,
-		rights,
-		...(Object.keys(environment).length > 0 ? { developmentCache: { environment } } : {}),
-	});
-}
-
-/** Renders only bounded, semantic net-new entries that approval will add. */
-export function projectPolicyDiff(
-	before: ProjectSandboxPolicy,
-	after: ProjectSandboxPolicy,
-	cwd: string,
-): string {
-	return sandboxPolicyDiff(before, after, `Project policy additions: ${projectPolicyPath(cwd)}`);
+	return normalizeSessionPolicy({ version: 1, rights });
 }
 
 export function sandboxPolicyDiff(
@@ -341,9 +296,6 @@ export function sandboxPolicySummary(
 		}
 		return `  ${"network".padEnd(8)}${"endpoint".padEnd(11)}${JSON.stringify(`${right.host}:${right.port}`)}`;
 	});
-	for (const [name, target] of Object.entries(additions.developmentCache?.environment ?? {})) {
-		lines.push(`  ${"cache".padEnd(8)}${name}  ${JSON.stringify(target)}`);
-	}
 	return [heading, ...lines].join("\n");
 }
 
@@ -360,7 +312,7 @@ function normalizeAccessPolicy(value: unknown, allowAbsolutePaths: boolean): Pro
 		throw new Error("project sandbox policy must be a JSON object");
 	}
 	const input = value as Record<string, unknown>;
-	assertKnownKeys(input, ["version", "rights", "developmentCache"], "project sandbox policy");
+	assertKnownKeys(input, ["version", "rights"], "project sandbox policy");
 	if (input.version !== 1) throw new Error("project sandbox policy version must be 1");
 	if (!Array.isArray(input.rights)) throw new Error("project sandbox policy rights must be an array");
 	if (input.rights.length > 256) throw new Error("project sandbox policy accepts at most 256 rights");
@@ -370,36 +322,58 @@ function normalizeAccessPolicy(value: unknown, allowAbsolutePaths: boolean): Pro
 	if (uniqueRights.filter((right) => right.kind === "filesystem").length > 64) {
 		throw new Error("Project policy accepts at most 64 filesystem rights; use tree rights instead of file lists");
 	}
-	let developmentCache: ProjectSandboxPolicy["developmentCache"];
-	if (input.developmentCache !== undefined) {
-		if (!input.developmentCache || typeof input.developmentCache !== "object" || Array.isArray(input.developmentCache)) {
-			throw new Error("developmentCache must be a JSON object");
-		}
-		const cache = input.developmentCache as Record<string, unknown>;
-		assertKnownKeys(cache, ["environment"], "developmentCache");
-		const normalized = normalizeDevelopmentCacheConfig({ environment: cache.environment });
-		const environment = Object.fromEntries(
-			Object.entries(normalized?.environment ?? {})
-				.sort(([left], [right]) => left.localeCompare(right)),
-		);
-		if (Object.keys(environment).length > 128) {
-			throw new Error("Project policy accepts at most 128 development-cache mappings");
-		}
-		if (Object.keys(environment).some((name) => name.length > 64)) {
-			throw new Error("Project development-cache environment names must be at most 64 characters");
-		}
-		if (Object.values(environment).some((target) => target.length > 256)) {
-			throw new Error("Project development-cache targets must be at most 256 characters");
-		}
-		if (Object.keys(environment).length > 0) {
-			developmentCache = { environment };
+	return { version: 1, rights: uniqueRights };
+}
+
+function normalizeStoredPolicy(
+	value: unknown,
+	allowAbsolutePaths: boolean,
+): { policy: ProjectSandboxPolicy; inactive: string[] } {
+	const inactive: string[] = [];
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		return { policy: structuredClone(EMPTY_PROJECT_POLICY), inactive: ["Stored grants must be a JSON object"] };
+	}
+	const input = value as Record<string, unknown>;
+	if (input.version !== 1 || !Array.isArray(input.rights)) {
+		return { policy: structuredClone(EMPTY_PROJECT_POLICY), inactive: ["Stored grants need version 1 and a rights array"] };
+	}
+	const unknown = Object.keys(input).filter((key) => !["version", "rights"].includes(key));
+	if (unknown.length > 0) inactive.push(`Unknown stored grant fields ignored: ${unknown.join(", ")}`);
+	const rights: ProjectAccessRight[] = [];
+	for (const [index, value] of input.rights.entries()) {
+		try {
+			rights.push(normalizeRight(value, allowAbsolutePaths));
+		} catch (error) {
+			inactive.push(`right ${index + 1}: ${errorMessage(error)}`);
 		}
 	}
-	return {
-		version: 1,
-		rights: uniqueRights,
-		...(developmentCache ? { developmentCache } : {}),
-	};
+	const unique = [...new Map(rights.map((right) => [rightKey(right), right])).values()]
+		.sort((left, right) => rightKey(left).localeCompare(rightKey(right)));
+	return { policy: { version: 1, rights: unique }, inactive };
+}
+
+function assertNetworkEndpointAllowed(
+	right: Extract<ProjectAccessRight, { kind: "network_endpoint" }>,
+	config: NativeSandboxConfig,
+): void {
+	if (config.network?.enabled === false) {
+		throw new Error(`${right.host}:${right.port} is denied because network access is disabled by machine policy`);
+	}
+	if ((config.network?.deniedDomains ?? []).some((rule) => networkRuleMatches(rule, right.host))) {
+		throw new Error(`${right.host}:${right.port} is denied by the machine sandbox policy`);
+	}
+}
+
+function assertNetworkHostAllowed(
+	right: Extract<ProjectAccessRight, { kind: "network_host" }>,
+	config: NativeSandboxConfig,
+): void {
+	if (config.network?.enabled === false) {
+		throw new Error(`${right.host} is denied because network access is disabled by machine policy`);
+	}
+	if ((config.network?.deniedDomains ?? []).some((rule) => networkRuleMatches(rule, right.host))) {
+		throw new Error(`${right.host} is denied by the machine sandbox policy`);
+	}
 }
 
 function normalizeRequestedRight(
@@ -464,7 +438,7 @@ function activateFilesystemRight(
 	const actual = canonicalize(lexical);
 	const projectRoot = right.access === "write" ? projectControlRoot(lexical, cwd) : undefined;
 	if (projectRoot) {
-		throw new Error(`Project policy cannot grant sandboxed writes to project ${projectRoot.endsWith(".guardian") ? ".guardian" : ".pi"}`);
+		throw new Error("Project policy cannot grant sandboxed writes to project .pi");
 	}
 	const gitRoot = right.access === "write" ? gitControlRoot(lexical, cwd) : undefined;
 	const explicitGitRoot = gitRoot !== undefined && actual === canonicalize(gitRoot);
@@ -475,8 +449,8 @@ function activateFilesystemRight(
 	) {
 		throw new Error(`Project policy cannot grant protected or machine-denied ${right.access} access: ${right.path}`);
 	}
-	if (!existsSync(actual) && right.access === "read") {
-		throw new Error(`Project policy read rights must target an existing path: ${right.path}`);
+	if (!existsSync(actual)) {
+		throw new Error(`Filesystem rights must target an existing path; approve an existing parent directory instead: ${right.path}`);
 	}
 	if (existsSync(actual)) {
 		const directory = statSync(actual).isDirectory();
@@ -490,26 +464,6 @@ function activateFilesystemRight(
 		}
 	}
 	return { kind: right.access, path: actual, directory: right.scope === "tree" };
-}
-
-function withProjectCacheEnvironment(
-	globalConfig: NativeSandboxConfig,
-	policy: ProjectSandboxPolicy,
-): NativeSandboxConfig {
-	const base = globalConfig.developmentCache?.environment ?? {};
-	const additions = policy.developmentCache?.environment ?? {};
-	for (const [name, target] of Object.entries(additions)) {
-		if (base[name] !== undefined && base[name] !== target) {
-			throw new Error(`Project developmentCache.environment cannot replace managed mapping ${name}`);
-		}
-	}
-	return {
-		...globalConfig,
-		developmentCache: {
-			...globalConfig.developmentCache,
-			environment: { ...base, ...additions },
-		},
-	};
 }
 
 function portableRequestPath(value: unknown, cwd: string, allowAbsolutePaths: boolean): string {
@@ -550,7 +504,7 @@ function normalizePortablePath(value: unknown): string {
 	}
 	if (value.length > 1024) throw new Error("filesystem paths must be at most 1024 characters");
 	if (isAbsolute(value)) {
-		throw new Error("Checked-in filesystem paths must be project-relative or home-relative (~/)");
+		throw new Error("Project filesystem paths must be project-relative or home-relative (~/)");
 	}
 	if (value === "~") return value;
 	const homeRelative = value.startsWith("~/");
@@ -623,6 +577,16 @@ function lstatIfExists(path: string): ReturnType<typeof lstatSync> | undefined {
 
 function rightKey(right: ProjectAccessRight): string {
 	return JSON.stringify(right);
+}
+
+function rightLabel(right: ProjectAccessRight): string {
+	if (right.kind === "filesystem") return `${right.access} ${right.scope} ${right.path}`;
+	if (right.kind === "network_host") return `network host ${right.host}`;
+	return `network endpoint ${right.host}:${right.port}`;
+}
+
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }
 
 function assertKnownKeys(value: Record<string, unknown>, allowed: readonly string[], field: string): void {

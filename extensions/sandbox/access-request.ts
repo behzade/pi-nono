@@ -34,7 +34,7 @@ export function registerAccessRequest(
 		name: "request_access",
 		label: "Request sandbox access",
 		description:
-			"Ask the user to grant filesystem, exact network host or loopback endpoint, and/or managed development-cache rights. Host-specific absolute paths can be approved only for this Pi session; portable rights may also enter checked-in project policy. This host tool updates policy only; it never runs or retries a command.",
+			"Ask the user to grant filesystem, exact network host, and/or loopback endpoint rights. Host-specific absolute paths can be approved only for this Pi session. This host tool updates policy only; it never runs or retries a command.",
 		promptSnippet:
 			"After a sandbox denial, request the smallest useful right. The user chooses session or project scope. If approved, explicitly rerun later.",
 		parameters: RequestAccessParams,

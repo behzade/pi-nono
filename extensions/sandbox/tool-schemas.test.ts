@@ -1,40 +1,38 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { BackgroundJobParams, validateBackgroundJobParams } from "./tool-schemas.ts";
+import { BashParams, ProcessParams } from "./tool-schemas.ts";
 
 const accessRequestSource = readFileSync(new URL("./access-request.ts", import.meta.url), "utf8");
 const schemaSource = readFileSync(new URL("./tool-schemas.ts", import.meta.url), "utf8");
 
-test("background jobs expose a provider-compatible object schema", () => {
-	const schema = BackgroundJobParams as {
+test("bash exposes optional bounded yielding", () => {
+	const schema = BashParams as {
 		type?: unknown;
-		anyOf?: unknown;
-		properties?: { action?: { anyOf?: Array<{ type?: unknown }> } };
+		properties?: { yield_ms?: { type?: unknown; minimum?: unknown; maximum?: unknown } };
 	};
 	assert.equal(schema.type, "object");
-	assert.equal(schema.anyOf, undefined);
-	assert.ok(schema.properties?.action?.anyOf?.length);
-	assert.ok(schema.properties?.action?.anyOf?.every((variant) => variant.type === "string"));
+	assert.deepEqual(schema.properties?.yield_ms, {
+		description: "How long to wait before returning a live process session",
+		minimum: 250,
+		maximum: 30_000,
+		type: "integer",
+	});
 });
 
-test("background jobs validate action-specific required fields before execution", () => {
-	assert.equal(validateBackgroundJobParams({ action: "start", name: "pi-test" }), "Background job action start requires command.");
-	assert.equal(validateBackgroundJobParams({ action: "read" }), "Background job action read requires name.");
-	assert.equal(validateBackgroundJobParams({ action: "keys", name: "pi-test" }), "Background job action keys requires keys.");
-	assert.deepEqual(
-		validateBackgroundJobParams({ action: "start", name: "pi-test", command: "sleep 1" }),
-		{ action: "start", name: "pi-test", command: "sleep 1" },
-	);
+test("process exposes only continuation primitives", () => {
+	const schema = ProcessParams as { properties?: Record<string, unknown>; required?: string[] };
+	assert.deepEqual(Object.keys(schema.properties ?? {}), ["id", "input", "close_stdin", "signal", "yield_ms"]);
+	assert.deepEqual(schema.required, ["id"]);
 });
 
-test("bash and background jobs cannot request per-command permissions", () => {
+test("bash and process cannot request per-command permissions", () => {
 	const bashStart = schemaSource.indexOf("export const BashParams");
-	const backgroundStart = schemaSource.indexOf("export const BackgroundJobParams");
-	const bashSchema = schemaSource.slice(bashStart, backgroundStart);
-	const backgroundSchema = schemaSource.slice(backgroundStart);
+	const processStart = schemaSource.indexOf("export const ProcessParams");
+	const bashSchema = schemaSource.slice(bashStart, processStart);
+	const processSchema = schemaSource.slice(processStart);
 	assert.doesNotMatch(bashSchema, /permissions/);
-	assert.doesNotMatch(backgroundSchema, /permissions/);
+	assert.doesNotMatch(processSchema, /permissions/);
 });
 
 test("request_access owns every durable access request variant", () => {
@@ -45,7 +43,7 @@ test("request_access owns every durable access request variant", () => {
 	assert.match(schema, /Type\.Literal\("network_host"\)/);
 	assert.match(schema, /Type\.Literal\("network_endpoint"\)/);
 	assert.match(schema, /minimum: 1, maximum: 65_535/);
-	assert.match(schema, /Type\.Literal\("development_cache"\)/);
+	assert.doesNotMatch(schema, /development_cache/);
 	assert.match(accessRequestSource, /name: "request_access"/);
 	assert.doesNotMatch(accessRequestSource, /name: "request_network_permission"/);
 });

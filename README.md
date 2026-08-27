@@ -13,18 +13,20 @@ Unlike command-based sandboxes that allow or deny volatile scripts, pi-nono enfo
 | --- | --- |
 | Workspace | Read and write |
 | System temporary directories | Read and write |
-| `~/.cache/pi-sandbox` | Read and write |
+| Development caches | Explicit ordinary filesystem approval |
 | Workspace Git metadata | Read; write with explicit `.git` approval |
-| Workspace `.guardian` policy files | Read-only |
+| Workspace `.pi` control files | Read-only |
 | Remote hosts | Explicit host approval |
 | Loopback services | Explicit host and port approval |
 
-pi-nono redirects common package-manager caches into
-`~/.cache/pi-sandbox`. Credentials, authentication files, `.env` files, private
-keys, and sandbox/Pi/Codex control paths remain protected.
+pi-nono does not create or redirect package-manager caches. Tools use their
+normal environment, and access to caches outside the workspace requires an
+ordinary filesystem right. Credentials, authentication files, `.env` files,
+private keys, and pi-nono/Pi/Codex control paths remain protected.
 
-The policy covers Pi's built-in file tools, shell commands, and pi-nono
-background jobs.
+The policy covers Pi's built-in file tools and shell commands. A bash command
+may yield a session-scoped process handle; continued interaction keeps the
+immutable policy captured when that command started.
 
 ## Install
 
@@ -38,6 +40,14 @@ pi install npm:pi-nono@next
 Nix users can use the repository flake. Tagged releases also include the main
 package and platform-specific npm tarballs.
 
+## Long-running processes
+
+Set `yield_ms` on `bash` to return a generated process session when a command
+remains active. The `process` tool can wait for incremental output, write or
+close stdin, or send `INT`, `TERM`, or `KILL` to that process group. Sessions
+use piped stdio rather than a pseudo-terminal. Completion is delivered
+automatically, so agents do not need to poll.
+
 ## Permissions
 
 When a task needs more access, pi-nono shows the exact capability and lets the
@@ -47,23 +57,33 @@ Supported capabilities are:
 
 - file or directory `read` and `write` access;
 - outbound access to an exact hostname;
-- access to an exact loopback host and port;
-- managed development-cache mappings.
+- access to an exact loopback host and port.
 
 | Policy | Path | Scope |
 | --- | --- | --- |
-| Machine | `~/.config/guardian/sandbox.json` | All pi-nono projects |
-| Project | `.guardian/sandbox.json` | Current trusted project |
-| Session | `~/.config/guardian/session-rights/<session-id-hash>.json` | Current Pi session |
+| Machine | `~/.config/pi-nono/sandbox.json` | All pi-nono projects |
+| Project | `~/.config/pi-nono/projects/<workspace-hash>.json` | One workspace identity |
+| Session | `~/.config/pi-nono/sessions/<session-id-hash>.json` | One Pi session identity |
 
-Session permissions are bound to the exact Pi session and persist when that
-session is resumed.
+Project and session grants are host-owned. No active permission policy is
+stored in the repository. Project records are bound to the canonical workspace
+path and filesystem identity; session records are also bound to the exact Pi
+session file.
+
+Invalid, deleted, symlinked, or type-changed optional grants are inactive and
+shown by `/sandbox`; they do not disable other grants or the sandbox. Deleted
+paths are not recreated. A malformed machine policy still blocks commands
+because ignoring machine restrictions could widen access.
+
+Broad read grants retain all nested machine denials. Broad write grants are
+rejected when the platform cannot safely enforce denied descendants.
 
 ## How it works
 
-pi-nono builds an immutable nono profile from the active machine, project, and
-session policy for each command. Background jobs keep the policy captured when
-they start.
+pi-nono generates an immutable, temporary nono profile from the active machine,
+project, and session policy for each command. It does not use persistent nono
+profiles from `~/.config/nono`. Yielded process sessions keep the policy
+captured when they start, deliver completion automatically, and never retry.
 
 - **Linux:** Landlock and nono enforce filesystem and network access. Bubblewrap
   applies protected subpaths inside writable directories.

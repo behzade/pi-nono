@@ -77,7 +77,7 @@ test("one failed command makes exactly one executor request and returns a bounde
 	assert.doesNotMatch(text, /Retrying command|Allow once/);
 });
 
-test("known host development caches recommend the managed cache adapter", async () => {
+test("host development caches request ordinary filesystem access", async () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pi-cache-denial-"));
 	const executor = new FakeSandboxExecutor({
 		exitCode: 1,
@@ -93,9 +93,9 @@ test("known host development caches recommend the managed cache adapter", async 
 		onData: (data) => output.push(data),
 	});
 	const text = Buffer.concat(output).toString("utf8");
-	assert.match(text, /host development cache \(Cargo\)/);
-	assert.match(text, /development_cache environment mapping/);
-	assert.doesNotMatch(text, /smallest portable file\/tree/);
+	assert.match(text, /write access: 1/);
+	assert.match(text, /smallest portable file\/tree/);
+	assert.doesNotMatch(text, /development_cache/);
 	assert.equal(executor.requests.length, 1);
 });
 
@@ -125,10 +125,8 @@ test("network-only and mixed denial hints stay grouped with three total examples
 	});
 	const text = Buffer.concat(output).toString("utf8");
 	assert.match(text, /Sandbox reported 4 denial hints/);
-	assert.match(text, /host development cache \(npm\)/);
-	assert.match(text, /write access/);
+	assert.match(text, /write access: 2/);
 	assert.match(text, /network access: 2/);
-	assert.match(text, /development_cache environment mapping/);
 	assert.match(text, /smallest portable file\/tree, exact network host, or exact loopback endpoint/);
 	assert.equal((text.match(/  example:/g) ?? []).length, 3);
 	assert.doesNotMatch(text, /\/dev\/null/);

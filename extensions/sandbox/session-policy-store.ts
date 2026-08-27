@@ -1,22 +1,23 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import {
 	closeSync,
-	lstatSync,
-	mkdirSync,
 	openSync,
-	readFileSync,
 	readSync,
 	realpathSync,
-	renameSync,
-	unlinkSync,
-	writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
 import { resolve } from "node:path";
+import {
+	assertSafePolicyStorage,
+	lstatIfExists,
+	piNonoConfigRoot,
+	readPolicySource,
+	replacePolicySource,
+} from "./policy-storage.ts";
 import type { NativeSandboxConfig } from "./sandbox-config.ts";
 import { canonicalize } from "./io-permissions.ts";
 import {
 	activateSessionPolicy,
+	activateStoredSessionPolicy,
 	EMPTY_PROJECT_POLICY,
 	normalizeSessionPolicy,
 	type ActiveProjectPolicy,
@@ -34,43 +35,46 @@ interface SessionPolicyRecord {
 	sessionId: string;
 	sessionFile: string;
 	cwd: string;
-	policy: ProjectSandboxPolicy;
-}
-
-export function guardianConfigRoot(): string {
-	return resolve(homedir(), ".config", "guardian");
+	policy: unknown;
 }
 
 export function sessionPolicyPath(
 	identity: SessionPolicyIdentity,
-	configRoot = guardianConfigRoot(),
+	configRoot = piNonoConfigRoot(),
 ): string {
 	const key = createHash("sha256").update(identity.sessionId).digest("hex");
-	return resolve(configRoot, "session-rights", `${key}.json`);
+	return resolve(configRoot, "sessions", `${key}.json`);
 }
 
 export function loadSessionPolicy(
 	identity: SessionPolicyIdentity,
 	globalConfig: NativeSandboxConfig,
-	configRoot = guardianConfigRoot(),
+	configRoot = piNonoConfigRoot(),
 ): ActiveProjectPolicy {
-	validateSessionId(identity.sessionId);
-	assertSafeStorage(configRoot, false);
-	const path = sessionPolicyPath(identity, configRoot);
-	const sourceText = readPolicySource(path);
-	if (sourceText === null) {
-		return activateSessionPolicy(EMPTY_PROJECT_POLICY, identity.cwd, globalConfig);
+	let sourceText: string | null = null;
+	try {
+		validateSessionId(identity.sessionId);
+		assertSafePolicyStorage(configRoot, "sessions", "session rights", false);
+		const path = sessionPolicyPath(identity, configRoot);
+		sourceText = readPolicySource(path, "Session sandbox policy");
+		if (sourceText === null) {
+			return activateSessionPolicy(EMPTY_PROJECT_POLICY, identity.cwd, globalConfig);
+		}
+		const expected = validateSessionIdentity(identity);
+		const record = normalizeRecord(JSON.parse(sourceText));
+		if (
+			record.sessionId !== expected.sessionId ||
+			record.sessionFile !== expected.sessionFile ||
+			record.cwd !== expected.cwd
+		) {
+			throw new Error("Session sandbox policy identity does not match the active Pi session");
+		}
+		return activateStoredSessionPolicy(record.policy, expected.cwd, globalConfig, sourceText);
+	} catch (error) {
+		const active = activateSessionPolicy(EMPTY_PROJECT_POLICY, identity.cwd, globalConfig, sourceText);
+		active.inactive.push(`Session grants ignored: ${errorMessage(error)}`);
+		return active;
 	}
-	const expected = validateSessionIdentity(identity);
-	const record = normalizeRecord(JSON.parse(sourceText));
-	if (
-		record.sessionId !== expected.sessionId ||
-		record.sessionFile !== expected.sessionFile ||
-		record.cwd !== expected.cwd
-	) {
-		throw new Error("Session sandbox policy identity does not match the active Pi session");
-	}
-	return activateSessionPolicy(record.policy, expected.cwd, globalConfig, sourceText);
 }
 
 /** Trusted-host write after approval, conditional on the exact loaded bytes. */
@@ -78,32 +82,23 @@ export function saveSessionPolicy(
 	identity: SessionPolicyIdentity,
 	policy: ProjectSandboxPolicy,
 	expectedSourceText: string | null,
-	configRoot = guardianConfigRoot(),
+	configRoot = piNonoConfigRoot(),
 ): string {
 	const expected = validateSessionIdentity(identity);
-	assertSafeStorage(configRoot, true);
 	const path = sessionPolicyPath(expected, configRoot);
-	if (readPolicySource(path) !== expectedSourceText) {
-		throw new Error("Session sandbox policy changed while request_access was awaiting approval");
-	}
 	const record: SessionPolicyRecord = {
 		version: 1,
 		...expected,
 		policy: normalizeSessionPolicy(policy),
 	};
 	const sourceText = `${JSON.stringify(record, null, 2)}\n`;
-	const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
-	writeFileSync(temporary, sourceText, { mode: 0o600, flag: "wx" });
-	try {
-		assertSafeStorage(configRoot, false);
-		if (readPolicySource(path) !== expectedSourceText) {
-			throw new Error("Session sandbox policy changed while request_access was awaiting approval");
-		}
-		renameSync(temporary, path);
-	} catch (error) {
-		tryUnlink(temporary);
-		throw error;
-	}
+	replacePolicySource(
+		path,
+		sourceText,
+		expectedSourceText,
+		(create) => assertSafePolicyStorage(configRoot, "sessions", "session rights", create),
+		"Session sandbox policy changed while request_access was awaiting approval",
+	);
 	return sourceText;
 }
 
@@ -167,52 +162,12 @@ function normalizeRecord(value: unknown): SessionPolicyRecord {
 		sessionId: input.sessionId,
 		sessionFile: resolve(input.sessionFile),
 		cwd: resolve(input.cwd),
-		policy: normalizeSessionPolicy(input.policy),
+		policy: input.policy,
 	};
 }
 
-function assertSafeStorage(configRoot: string, create: boolean): void {
-	const root = resolve(configRoot);
-	const rightsRoot = resolve(root, "session-rights");
-	for (const directory of [root, rightsRoot]) {
-		const metadata = lstatIfExists(directory);
-		if (metadata?.isSymbolicLink()) {
-			throw new Error(`A symlinked pi-nono config directory cannot hold session rights: ${directory}`);
-		}
-		if (metadata && !metadata.isDirectory()) {
-			throw new Error(`pi-nono session-rights control path must be a directory: ${directory}`);
-		}
-	}
-	if (!create) return;
-	mkdirSync(rightsRoot, { recursive: true, mode: 0o700 });
-	for (const directory of [root, rightsRoot]) {
-		const metadata = lstatSync(directory);
-		if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
-			throw new Error(`pi-nono session-rights control path is unsafe: ${directory}`);
-		}
-	}
-}
-
-function readPolicySource(path: string): string | null {
-	const metadata = lstatIfExists(path);
-	if (!metadata) return null;
-	if (metadata.isSymbolicLink() || !metadata.isFile()) {
-		throw new Error(`Session sandbox policy must be a regular non-symlink file: ${path}`);
-	}
-	return readFileSync(path, "utf8");
-}
-
-function lstatIfExists(path: string): ReturnType<typeof lstatSync> | undefined {
-	try {
-		return lstatSync(path);
-	} catch (error) {
-		if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return undefined;
-		throw error;
-	}
-}
-
-function tryUnlink(path: string): void {
-	try { unlinkSync(path); } catch { /* Preserve the policy error. */ }
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }
 
 function assertKnownKeys(value: Record<string, unknown>, allowed: readonly string[]): void {

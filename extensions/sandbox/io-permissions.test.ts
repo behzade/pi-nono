@@ -40,9 +40,8 @@ test("project control roots are identified before symlink canonicalization", () 
 
 test("hard protected paths and exact network hosts remain strict", () => {
 	assert.equal(isProtectedPath("/dev/tty"), true);
-	assert.equal(isProtectedPath(join(homedir(), ".config", "guardian", "sandbox.json")), true);
-	assert.equal(isProtectedWritePath(join(homedir(), ".config", "guardian", "session-rights")), true);
-	assert.equal(isProtectedWritePath(join(homedir(), ".guardian")), false);
+	assert.equal(isProtectedPath(join(homedir(), ".config", "pi-nono", "sandbox.json")), true);
+	assert.equal(isProtectedWritePath(join(homedir(), ".config", "pi-nono", "sessions")), true);
 	assert.equal(normalizeNetworkHost("API.Example.COM."), "api.example.com");
 	assert.equal(normalizeNetworkHost("[::1]"), "::1");
 	assert.throws(() => normalizeNetworkHost("https://example.com"), /exact hostname/);

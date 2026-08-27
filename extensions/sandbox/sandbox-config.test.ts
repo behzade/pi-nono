@@ -55,9 +55,8 @@ test("global config extends defaults without dropping hard rules", () => {
 	assert(result.filesystem?.allowWrite?.includes("."));
 	assert(result.filesystem?.allowWrite?.includes("/state"));
 	assert(result.filesystem?.denyRead?.includes("~/.ssh"));
-	assert(result.filesystem?.denyRead?.includes("~/.config/guardian"));
-	assert(result.filesystem?.denyWrite?.includes("~/.config/guardian"));
-	assert.equal(result.filesystem?.denyWrite?.includes("~/.guardian"), false);
+	assert(result.filesystem?.denyRead?.includes("~/.config/pi-nono"));
+	assert(result.filesystem?.denyWrite?.includes("~/.config/pi-nono"));
 	assert(result.filesystem?.denyRead?.includes("**/private.json"));
 	assert.deepEqual(result.network?.allowedDomains, ["grafana.example.com"]);
 });

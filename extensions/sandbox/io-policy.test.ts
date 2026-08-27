@@ -4,7 +4,6 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { DEFAULT_CONFIG } from "./sandbox-config.ts";
-import { developmentCacheRoot } from "./development-caches.ts";
 import {
 	isBaseReadAllowed,
 	isBaseWriteAllowed,
@@ -29,30 +28,14 @@ test("base rights allow workspace reads and workspace or temp writes", () => {
 		isBaseWriteAllowed(join(workspace, ".pi", "extensions", "unsafe.ts"), DEFAULT_CONFIG, workspace),
 		false,
 	);
-	assert.equal(
-		isBaseWriteAllowed(join(workspace, ".guardian", "sandbox.json"), DEFAULT_CONFIG, workspace),
-		false,
-	);
 });
 
-test("only the sandbox-owned development cache namespace is writable", () => {
+test("host development caches require ordinary filesystem rights", () => {
 	const workspace = "/work";
-	const cacheRoot = developmentCacheRoot();
 	for (const path of [
-		join(cacheRoot, "cargo", "registry", "cache", "package.crate"),
-		join(cacheRoot, "npm", "_cacache", "entry"),
-		join(cacheRoot, "go", "mod", "cache", "download", "module"),
-		join(cacheRoot, "xdg", "nix", "fetcher-cache-v4.sqlite"),
-	]) {
-		assert.equal(isBaseWriteAllowed(path, DEFAULT_CONFIG, workspace), true, path);
-	}
-	const hostHome = "/home/sandbox-user";
-	for (const path of [
-		join(hostHome, ".cargo", ".package-cache"),
-		join(hostHome, ".cargo", "config.toml"),
-		join(hostHome, ".cargo", "credentials.toml"),
-		join(hostHome, ".cargo", "bin", "cargo-tool"),
-		join(hostHome, ".npm", "_cacache", "entry"),
+		join(homedir(), ".cargo", "registry", "cache", "package.crate"),
+		join(homedir(), ".npm", "_cacache", "entry"),
+		join(homedir(), ".cache", "tool", "entry"),
 	]) {
 		assert.equal(isBaseWriteAllowed(path, DEFAULT_CONFIG, workspace), false, path);
 	}

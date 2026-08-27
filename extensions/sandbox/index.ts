@@ -1,7 +1,7 @@
-/** Native command sandbox with checked-in project access policy. */
+/** Native command sandbox with host-owned project and session access policy. */
 
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, resolve } from "node:path";
 import type {
@@ -16,12 +16,10 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { NonoClient } from "./nono-client.ts";
 import {
-	backgroundKeyBytes,
-	isValidBackgroundJobName,
-	modelVisibleBackgroundJobOutput,
-	notifyBackgroundJobSettlement,
-} from "./background-jobs.ts";
-import { developmentCacheRoot } from "./development-caches.ts";
+	formatProcessSnapshot,
+	notifyProcessSettlement,
+	processSessionDetails,
+} from "./process-sessions.ts";
 import { ActiveAccessPolicy } from "./active-access-policy.ts";
 import { registerAccessRequest } from "./access-request.ts";
 import {
@@ -34,13 +32,11 @@ import {
 	canonicalize,
 	gitControlRoot,
 	isControlRootSymlink,
-	isInside,
 	isProtectedPath,
 	isProtectedWritePath,
 	permissionCoversPath,
 	projectControlRoot,
 	resolveLexicalPermissionPath,
-	resolvePermissionPath,
 } from "./io-permissions.ts";
 import {
 	isBaseReadAllowed,
@@ -54,11 +50,10 @@ import {
 	registerApprovalSession,
 	unregisterApprovalSession,
 } from "./approval-transport.ts";
-import { NativeBackgroundJobs } from "./native-background-jobs.ts";
+import { NativeProcessSessions } from "./native-process-sessions.ts";
 import {
-	BackgroundJobParams,
 	BashParams,
-	validateBackgroundJobParams,
+	ProcessParams,
 } from "./tool-schemas.ts";
 import {
 	projectPolicyPath,
@@ -73,7 +68,7 @@ import {
 import { FIXED_NONO_PATH } from "./fixed-executables.ts";
 
 function readGlobalConfig(): NativeSandboxConfig {
-	const path = resolve(homedir(), ".config", "guardian", "sandbox.json");
+	const path = resolve(homedir(), ".config", "pi-nono", "sandbox.json");
 	const legacy = resolve(getAgentDir(), "extensions", "sandbox.json");
 	const source = existsSync(path) ? path : legacy;
 	if (!existsSync(source)) return mergeGlobalConfig(DEFAULT_CONFIG, {});
@@ -108,7 +103,7 @@ export default function (pi: ExtensionAPI) {
 	let sandboxState: SandboxState = { kind: "initializing" };
 	let accessPolicy: ActiveAccessPolicy | undefined;
 	let nonoClient: NonoClient | undefined;
-	let backgroundJobs: NativeBackgroundJobs | undefined;
+	let processSessions: NativeProcessSessions | undefined;
 	let userBashCounter = 0;
 	let sessionGeneration = 0;
 	let approvalContext: ExtensionContext | undefined;
@@ -131,46 +126,27 @@ export default function (pi: ExtensionAPI) {
 	registerAccessRequest(pi, activeAccess, setEffectiveConfig);
 
 	pi.registerTool({
-		name: "background_job",
-		label: "Background job",
+		name: "process",
+		label: "Process session",
 		description:
-			"Start, list, inspect, interact with, or stop a session-scoped long-running command. New jobs capture the active project and Pi-session rights at start; existing jobs keep their start policy. Job completion is delivered automatically.",
+			"Continue a sandboxed process session returned by bash. With no mutation, wait for new output or completion. Optionally write stdin, close stdin, or signal the process group before waiting. Existing sessions keep the immutable policy captured by bash.",
 		promptSnippet:
-			"Use background_job for long-running servers, watchers, builds, and tests. Completion wakes the agent automatically; do not poll. Use request_access separately if policy must change, then start a new job.",
-		parameters: BackgroundJobParams,
+			"Continue a yielded bash process by waiting, writing or closing stdin, or sending INT, TERM, or KILL. Completion wakes the agent automatically; do not poll.",
+		parameters: ProcessParams,
 		executionMode: "sequential",
-		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-			const validated = validateBackgroundJobParams(params);
-			if (typeof validated === "string") return toolError(validated);
-			if ("name" in validated && !isValidBackgroundJobName(validated.name)) {
-				return toolError("Job names must start with pi- and use only letters, digits, dots, underscores, or hyphens.");
-			}
-			if (sandboxState.kind !== "ready" || !backgroundJobs) return toolError("The native sandbox is not ready.");
+		async execute(_toolCallId, params, signal) {
+			if (sandboxState.kind !== "ready" || !processSessions) return toolError("The native sandbox is not ready.");
 			try {
-				let output: string;
-				if (validated.action === "start") {
-					const cwd = resolvePermissionPath(validated.cwd ?? ctx.cwd, ctx.cwd);
-					if (!isInside(canonicalize(ctx.cwd), cwd)) throw new Error("Background jobs must start inside the current workspace.");
-					if (!existsSync(cwd) || !statSync(cwd).isDirectory()) throw new Error(`Background job directory does not exist: ${cwd}`);
-					const policyAtStart = synchronizeAccess();
-					output = await backgroundJobs.start({
-						name: validated.name,
-						command: validated.command,
-						cwd,
-						config: policyAtStart.config,
-						permissions: policyAtStart.filesystem,
-						revalidatePermissions: () => activeAccess().revalidate(policyAtStart).filesystem,
-						networkHosts: networkHosts(policyAtStart),
-						localPorts: policyAtStart.localPorts,
-					}, signal);
-				} else if (validated.action === "list") output = backgroundJobs.list();
-				else if (validated.action === "status") output = backgroundJobs.status(validated.name);
-				else if (validated.action === "read") output = modelVisibleBackgroundJobOutput("read", backgroundJobs.read(validated.name, validated.lines ?? 200));
-				else if (validated.action === "write") output = backgroundJobs.write(validated.name, Buffer.from(validated.text));
-				else if (validated.action === "line") output = backgroundJobs.write(validated.name, Buffer.from(`${validated.text}\n`));
-				else if (validated.action === "keys") output = backgroundJobs.write(validated.name, backgroundKeyBytes(validated.keys));
-				else output = await backgroundJobs.stop(validated.name);
-				return { content: [{ type: "text", text: output || "Done" }], details: { action: validated.action } };
+				const snapshot = await processSessions.continue(params.id, {
+					...(params.input === undefined ? {} : { input: params.input }),
+					...(params.close_stdin === undefined ? {} : { closeStdin: params.close_stdin }),
+					...(params.signal === undefined ? {} : { signal: params.signal }),
+					yieldMs: params.yield_ms ?? 1000,
+				}, signal);
+				return {
+					content: [{ type: "text", text: formatProcessSnapshot(snapshot) }],
+					details: processSessionDetails(snapshot),
+				};
 			} catch (error) {
 				return toolError(errorMessage(error));
 			}
@@ -181,14 +157,34 @@ export default function (pi: ExtensionAPI) {
 		...localBash,
 		label: "bash (OS sandbox)",
 		description:
-			"Execute one bash command with the active project and Pi-session sandbox policy. The call cannot declare rights and is never automatically retried. Use request_access separately after a denial.",
+			"Execute one bash command with the active project and Pi-session sandbox policy. Set yield_ms to return a generated process session if the command remains active. The call cannot declare rights and is never automatically retried. Use request_access separately after a denial.",
 		promptSnippet:
-			"Run once under the active policy. On denial, inspect the bounded summary, request the smallest right, and explicitly rerun later. Prefer managed development caches over host cache grants.",
+			"Run once under the active policy; optionally yield a long-running command into a process session. On denial, request the smallest right and explicitly rerun later.",
 		parameters: BashParams,
 		executionMode: "sequential",
 		renderShell: "self",
-		async execute(id, params, signal, onUpdate) {
-			if (sandboxState.kind === "disabled") return localBash.execute(id, params, signal, onUpdate);
+		async execute(id, params, signal, onUpdate, ctx) {
+			if (params.yield_ms !== undefined) {
+				if (sandboxState.kind === "disabled") throw new Error("Process yielding is unavailable while the sandbox is disabled");
+				if (sandboxState.kind !== "ready") throw new Error(sandboxState.kind === "failed" ? sandboxState.reason : "Sandbox is still initializing; command blocked");
+				if (!processSessions) throw new Error("Process sessions are not ready");
+				const policyAtStart = synchronizeAccess();
+				const sessionId = await processSessions.start({
+					command: params.command,
+					cwd: ctx?.cwd ?? localCwd,
+					...(params.timeout === undefined ? {} : { timeout: params.timeout }),
+					config: policyAtStart.config,
+					permissions: policyAtStart.filesystem,
+					revalidatePermissions: () => activeAccess().revalidate(policyAtStart).filesystem,
+					networkHosts: networkHosts(policyAtStart),
+					localPorts: policyAtStart.localPorts,
+				}, signal);
+				const snapshot = await processSessions.yield(sessionId, params.yield_ms, signal);
+				const output = formatProcessSnapshot(snapshot);
+				if (snapshot.state === "failed" || snapshot.state === "exited") throw new Error(output);
+				return { content: [{ type: "text", text: output }], details: processSessionDetails(snapshot) };
+			}
+			if (sandboxState.kind === "disabled") return localBash.execute(id, params, signal, onUpdate, ctx);
 			if (sandboxState.kind !== "ready") throw new Error(sandboxState.kind === "failed" ? sandboxState.reason : "Sandbox is still initializing; command blocked");
 			if (!nonoClient) throw new Error("Nono sandbox is not ready");
 			const policyAtStart = synchronizeAccess();
@@ -204,7 +200,7 @@ export default function (pi: ExtensionAPI) {
 					revalidatePermissions: () => activeAccess().revalidate(policyAtStart).filesystem,
 				},
 			);
-			return createBashTool(localCwd, { operations }).execute(id, params, signal, onUpdate);
+			return createBashTool(localCwd, { operations }).execute(id, params, signal, onUpdate, ctx);
 		},
 	});
 
@@ -314,12 +310,12 @@ export default function (pi: ExtensionAPI) {
 			const client = await NonoClient.start(nonoPath, packagedExecutables.bwrapPath);
 			if (generation !== sessionGeneration) { await client.shutdown(); return; }
 			nonoClient = client;
-			backgroundJobs = new NativeBackgroundJobs(
+			processSessions = new NativeProcessSessions(
 				nonoPath,
 				packagedExecutables.bwrapPath,
 				sessionEnvironment,
 				(settlement) => {
-					if (generation === sessionGeneration) notifyBackgroundJobSettlement(pi, settlement);
+					if (generation === sessionGeneration) notifyProcessSettlement(pi, settlement);
 				},
 			);
 			sandboxState = {
@@ -344,9 +340,9 @@ export default function (pi: ExtensionAPI) {
 		approvalContext = undefined;
 		const client = nonoClient;
 		nonoClient = undefined;
-		const jobs = backgroundJobs;
-		backgroundJobs = undefined;
-		if (jobs) await jobs.shutdown();
+		const sessions = processSessions;
+		processSessions = undefined;
+		if (sessions) await sessions.shutdown();
 		if (client) await client.shutdown();
 		accessPolicy = undefined;
 		userBashCounter = 0;
@@ -375,7 +371,9 @@ export default function (pi: ExtensionAPI) {
 				`  Session policy: ${access.sessionIdentity ? sessionPolicyPath(access.sessionIdentity) : "ephemeral"}`,
 				`  Network hosts: ${networkHosts().join(", ") || "(blocked)"}`,
 				`  Loopback ports: ${access.effective.localPorts.join(", ") || "(blocked)"}`,
-				`  Development cache: ${developmentCacheRoot(sandboxState.config.developmentCache)}`,
+				...(access.effective.inactive.length > 0
+					? ["  Inactive grants:", ...access.effective.inactive.map((entry) => `    - ${entry}`)]
+					: []),
 				"  Denials: bounded diagnostics; no automatic retry",
 			].join("\n"), "info");
 		},

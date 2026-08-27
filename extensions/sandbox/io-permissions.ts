@@ -8,17 +8,13 @@ import { isIP } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { domainToASCII } from "node:url";
-import {
-	developmentCacheRightForPath,
-	type DevelopmentCacheConfig,
-} from "./development-caches.ts";
 
 export interface IoPermission {
 	kind: "read" | "write";
 	path: string;
 	directory: boolean;
 }
-const protectedHomeRoots = [".ssh", ".aws", ".gnupg", ".config/guardian"];
+const protectedHomeRoots = [".ssh", ".aws", ".gnupg", ".config/pi-nono"];
 const protectedSystemRoots = ["/dev"];
 const protectedWriteRoots = [".pi", ".codex"];
 const protectedAuthFiles = [
@@ -130,7 +126,7 @@ export function gitControlRoot(path: string, cwd?: string): string | undefined {
 export function projectControlRoot(path: string, cwd: string): string | undefined {
 	const lexical = resolve(path);
 	const actual = canonicalize(path);
-	for (const name of [".guardian", ".pi"] as const) {
+	for (const name of [".pi"] as const) {
 		const root = resolve(cwd, name);
 		const canonicalRoot = canonicalize(root);
 		const returnedRoot = basename(canonicalRoot) === name ? canonicalRoot : root;
@@ -140,7 +136,7 @@ export function projectControlRoot(path: string, cwd: string): string | undefine
 }
 
 export function isControlRootSymlink(path: string): boolean {
-	if (![".git", ".guardian", ".pi"].includes(basename(path))) return false;
+	if (![".git", ".pi"].includes(basename(path))) return false;
 	try {
 		return lstatSync(path).isSymbolicLink();
 	} catch {
@@ -198,16 +194,9 @@ export function permissionCoversPath(permission: IoPermission, path: string): bo
 	return permission.directory ? isInside(root, target) : root === target;
 }
 
-export function isDefaultWritePath(
-	path: string,
-	cwd: string,
-	developmentCache?: DevelopmentCacheConfig,
-): boolean {
+export function isDefaultWritePath(path: string, cwd: string): boolean {
 	const actual = canonicalize(path);
-	return (
-		developmentCacheRightForPath(actual, developmentCache) !== undefined ||
-		[canonicalize(cwd), canonicalize("/tmp"), canonicalize(tmpdir())].some((root) =>
-			isInside(root, actual),
-		)
+	return [canonicalize(cwd), canonicalize("/tmp"), canonicalize(tmpdir())].some((root) =>
+		isInside(root, actual),
 	);
 }

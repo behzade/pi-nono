@@ -25,7 +25,7 @@ const machine = mergeGlobalConfig(DEFAULT_CONFIG, {});
 function fixture(): { cwd: string; root: string; identity: SessionPolicyIdentity } {
 	const base = mkdtempSync(join(tmpdir(), "pi-session-policy-"));
 	const cwd = join(base, "workspace");
-	const root = join(base, "config", "guardian");
+	const root = join(base, "config", "pi-nono");
 	const sessionFile = join(base, "session.jsonl");
 	mkdirSync(cwd);
 	writeFileSync(sessionFile, `${JSON.stringify({ type: "session", version: 3, id: "session-one", cwd })}\n`);
@@ -36,6 +36,7 @@ test("session rights persist in a user-local sidecar bound to exact Pi session i
 	const { cwd, root, identity } = fixture();
 	const external = join(cwd, "..", "mounted-assets");
 	mkdirSync(external);
+	mkdirSync(join(cwd, "state"));
 	const initial = loadSessionPolicy(identity, machine, root);
 	assert.deepEqual(initial.policy, { version: 1, rights: [] });
 	const source = saveSessionPolicy(identity, {
@@ -49,23 +50,21 @@ test("session rights persist in a user-local sidecar bound to exact Pi session i
 	const path = sessionPolicyPath(identity, root);
 	assert.equal(readFileSync(path, "utf8"), source);
 	assert.equal(statSync(path).mode & 0o777, 0o600);
-	assert.equal(statSync(join(root, "session-rights")).mode & 0o777, 0o700);
+	assert.equal(statSync(join(root, "sessions")).mode & 0o777, 0o700);
 	assert.doesNotMatch(path, /session-one/);
 	const restored = loadSessionPolicy(identity, machine, root);
 	assert.equal(restored.networkHosts[0], "api.example.com");
 	assert(restored.filesystem.some((right) => right.path === join(cwd, "state")));
 	assert(restored.filesystem.some((right) => right.path === external && right.directory));
 
-	assert.throws(
-		() => loadSessionPolicy({ ...identity, cwd: join(cwd, "other") }, machine, root),
-		/working directory|identity does not match/,
-	);
+	const wrongCwd = loadSessionPolicy({ ...identity, cwd: join(cwd, "other") }, machine, root);
+	assert.equal(wrongCwd.filesystem.length, 0);
+	assert(wrongCwd.inactive.some((entry) => /working directory|identity does not match/.test(entry)));
 	const copiedFile = join(cwd, "other.jsonl");
 	writeFileSync(copiedFile, readFileSync(identity.sessionFile));
-	assert.throws(
-		() => loadSessionPolicy({ ...identity, sessionFile: copiedFile }, machine, root),
-		/identity does not match/,
-	);
+	const copied = loadSessionPolicy({ ...identity, sessionFile: copiedFile }, machine, root);
+	assert.equal(copied.filesystem.length, 0);
+	assert(copied.inactive.some((entry) => /identity does not match/.test(entry)));
 });
 
 test("a session without durable rights does not require an existing Pi session file", () => {
@@ -81,14 +80,25 @@ test("a session without durable rights does not require an existing Pi session f
 	assert.equal(active.sourceText, null);
 });
 
-test("existing durable rights still require a valid Pi session file", () => {
+test("invalid durable session identity deactivates grants without disabling the sandbox", () => {
 	const { root, identity } = fixture();
 	saveSessionPolicy(identity, { version: 1, rights: [] }, null, root);
 	unlinkSync(identity.sessionFile);
-	assert.throws(
-		() => loadSessionPolicy(identity, machine, root),
-		/regular non-symlink Pi session file/,
-	);
+	const active = loadSessionPolicy(identity, machine, root);
+	assert.deepEqual(active.policy, { version: 1, rights: [] });
+	assert(active.inactive.some((entry) => /regular non-symlink Pi session file/.test(entry)));
+});
+
+test("an approved update can repair a corrupt optional session-grants file", () => {
+	const { root, identity } = fixture();
+	saveSessionPolicy(identity, { version: 1, rights: [] }, null, root);
+	const path = sessionPolicyPath(identity, root);
+	writeFileSync(path, "{broken\n");
+	const loaded = loadSessionPolicy(identity, machine, root);
+	assert.equal(loaded.sourceText, "{broken\n");
+	assert(loaded.inactive.some((entry) => /Session grants ignored/.test(entry)));
+	const repaired = saveSessionPolicy(identity, { version: 1, rights: [] }, loaded.sourceText, root);
+	assert.equal(readFileSync(path, "utf8"), repaired);
 });
 
 test("session policy writes reject stale snapshots and symlinked control paths", () => {
@@ -105,11 +115,13 @@ test("session policy writes reject stale snapshots and symlinked control paths",
 
 	const linked = fixture();
 	const target = mkdtempSync(join(tmpdir(), "pi-session-policy-target-"));
-	mkdirSync(join(linked.root, "session-rights"), { recursive: true });
-	const rightsRoot = join(linked.root, "session-rights");
+	mkdirSync(join(linked.root, "sessions"), { recursive: true });
+	const rightsRoot = join(linked.root, "sessions");
 	rmSync(rightsRoot, { recursive: true });
 	symlinkSync(target, rightsRoot);
-	assert.throws(() => loadSessionPolicy(linked.identity, machine, linked.root), /symlinked pi-nono config directory/);
+	const inactive = loadSessionPolicy(linked.identity, machine, linked.root);
+	assert.deepEqual(inactive.policy, { version: 1, rights: [] });
+	assert(inactive.inactive.some((entry) => /symlinked pi-nono config directory/.test(entry)));
 });
 
 test("session files themselves cannot be forged or symlink aliases", () => {

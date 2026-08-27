@@ -76,21 +76,6 @@ test("macOS grants Zig the exact machine trust-store file", () => {
 	assert.equal(darwin.filesystem.read_file.includes("/Library/Keychains"), false);
 });
 
-test("macOS keeps project .guardian readable but read-only", () => {
-	const value = request({ mode: "blocked" });
-	value.policy.denies = [{ access: "write", pattern: "/work/.guardian", scope: "tree" }];
-	const profile = buildNonoProfile(value, "darwin") as {
-		filesystem: { read: string[]; deny: string[] };
-		unsafe_macos_seatbelt_rules: string[];
-	};
-
-	assert(profile.filesystem.read.includes("/work"));
-	assert.deepEqual(profile.filesystem.deny, []);
-	assert.deepEqual(profile.unsafe_macos_seatbelt_rules, [
-		'(deny file-write* (subpath "/work/.guardian"))',
-	]);
-});
-
 test("profile maps exact hosts without enabling unrestricted network", () => {
 	const profile = buildNonoProfile(request({
 		mode: "proxy",

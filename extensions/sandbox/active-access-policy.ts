@@ -1,12 +1,11 @@
-import { ensureDevelopmentCacheDirectories } from "./development-caches.ts";
 import {
 	activateProjectPolicy,
 	activateSessionPolicy,
+	activateStoredSessionPolicy,
 	EMPTY_PROJECT_POLICY,
 	loadProjectPolicy,
 	loadProjectPolicyForUpdate,
 	mergeAccessPolicies,
-	sameProjectPolicy,
 	type ActiveProjectPolicy,
 } from "./project-policy.ts";
 import type { NativeSandboxConfig } from "./sandbox-config.ts";
@@ -43,7 +42,7 @@ export class ActiveAccessPolicy {
 			cwd,
 			machineConfig,
 		);
-		ensureDevelopmentCacheDirectories(effective.config.developmentCache);
+		effective.inactive.push(...project.inactive, ...session.inactive);
 		return new ActiveAccessPolicy(cwd, machineConfig, trusted, sessionIdentity, project, session, effective);
 	}
 
@@ -57,7 +56,6 @@ export class ActiveAccessPolicy {
 	}
 
 	replace(project: ActiveProjectPolicy, session: ActiveProjectPolicy): ActiveProjectPolicy {
-		const previous = this.effective;
 		this.project = project;
 		this.session = session;
 		this.effective = activateSessionPolicy(
@@ -65,14 +63,12 @@ export class ActiveAccessPolicy {
 			this.cwd,
 			this.machineConfig,
 		);
-		if (!sameProjectPolicy(previous.policy, this.effective.policy)) {
-			ensureDevelopmentCacheDirectories(this.effective.config.developmentCache);
-		}
+		this.effective.inactive.push(...project.inactive, ...session.inactive);
 		return this.effective;
 	}
 
 	revalidate(policy: ActiveProjectPolicy = this.effective): ActiveProjectPolicy {
-		return activateSessionPolicy(
+		return activateStoredSessionPolicy(
 			policy.policy,
 			this.cwd,
 			this.machineConfig,
