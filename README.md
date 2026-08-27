@@ -13,16 +13,18 @@ Unlike command-based sandboxes that allow or deny volatile scripts, pi-nono enfo
 | --- | --- |
 | Workspace | Read and write |
 | System temporary directories | Read and write |
-| Development caches | Explicit ordinary filesystem approval |
+| Existing package-manager caches | Read and write |
 | Workspace Git metadata | Read; write with explicit `.git` approval |
 | Workspace `.pi` control files | Read-only |
 | Remote hosts | Explicit host approval |
 | Loopback services | Explicit host and port approval |
 
-pi-nono does not create or redirect package-manager caches. Tools use their
-normal environment, and access to caches outside the workspace requires an
-ordinary filesystem right. Credentials, authentication files, `.env` files,
-private keys, and pi-nono/Pi/Codex control paths remain protected.
+pi-nono does not create or redirect package-manager caches. It grants existing,
+symlink-free cache roots for common development tools at their normal host
+locations, plus read-only access to installed Cargo, Rustup, Bun, and Nix
+runtime roots. Unknown development storage still requires ordinary filesystem
+approval. Credentials, authentication files, `.env` files, private keys, and
+pi-nono/Pi/Codex control paths remain protected.
 
 The policy covers Pi's built-in file tools and shell commands. A bash command
 may yield a session-scoped process handle; continued interaction keeps the

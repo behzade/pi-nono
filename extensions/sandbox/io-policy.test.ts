@@ -30,15 +30,32 @@ test("base rights allow workspace reads and workspace or temp writes", () => {
 	);
 });
 
-test("host development caches require ordinary filesystem rights", () => {
+test("existing host development caches are readable and writable by default", () => {
 	const workspace = "/work";
+	mkdirSync(join(homedir(), ".bun", "bin"), { recursive: true });
+	mkdirSync(join(homedir(), ".cargo", "registry"), { recursive: true });
+	mkdirSync(join(homedir(), ".npm"), { recursive: true });
+	mkdirSync(join(homedir(), ".cache", "zig"), { recursive: true });
 	for (const path of [
 		join(homedir(), ".cargo", "registry", "cache", "package.crate"),
 		join(homedir(), ".npm", "_cacache", "entry"),
-		join(homedir(), ".cache", "tool", "entry"),
+		join(homedir(), ".cache", "zig", "o", "artifact"),
 	]) {
-		assert.equal(isBaseWriteAllowed(path, DEFAULT_CONFIG, workspace), false, path);
+		assert.equal(isBaseReadAllowed(path, DEFAULT_CONFIG, workspace), true, path);
+		assert.equal(isBaseWriteAllowed(path, DEFAULT_CONFIG, workspace), true, path);
 	}
+	const bunExecutable = join(homedir(), ".bun", "bin", "bun");
+	assert.equal(isBaseReadAllowed(bunExecutable, DEFAULT_CONFIG, workspace), true);
+	assert.equal(isBaseWriteAllowed(bunExecutable, DEFAULT_CONFIG, workspace), false);
+	assert.equal(
+		isBaseWriteAllowed(join(homedir(), ".cache", "unknown-tool", "entry"), DEFAULT_CONFIG, workspace),
+		false,
+	);
+	const linkedTarget = join(homedir(), "linked-cache-target");
+	mkdirSync(linkedTarget);
+	mkdirSync(join(homedir(), ".cache"), { recursive: true });
+	symlinkSync(linkedTarget, join(homedir(), ".cache", "pip"));
+	assert.equal(isBaseWriteAllowed(join(homedir(), ".cache", "pip", "entry"), DEFAULT_CONFIG, workspace), false);
 });
 
 test("git metadata in a configured cache stays writable", () => {

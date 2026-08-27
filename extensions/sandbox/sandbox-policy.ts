@@ -6,6 +6,7 @@ import type {
 	SandboxFilesystemDeny,
 	SandboxFilesystemRight,
 } from "./sandbox-protocol.ts";
+import { hostDevelopmentPaths } from "./host-development-paths.ts";
 import {
 	DEFAULT_CONFIG,
 	buildShellEnvironment,
@@ -115,35 +116,47 @@ function baseRights(
 	cwd: string,
 ): SandboxFilesystemRight[] {
 	const rights = new Map<string, SandboxFilesystemRight>();
-	for (const entry of config.filesystem?.allowRead ?? []) {
-		const right = configRight("read", entry, cwd);
-		if (right) rights.set(`read:${right.path}:${right.scope}`, right);
-	}
-	for (const entry of config.filesystem?.allowWrite ?? []) {
-		const right = configRight("write", entry, cwd);
-		if (right) rights.set(`write:${right.path}:${right.scope}`, right);
+	for (const [access, entries] of [
+		["read" as const, config.filesystem?.allowRead ?? []],
+		["write" as const, config.filesystem?.allowWrite ?? []],
+	] as const) {
+		for (const entry of entries) {
+			for (const right of configRights(access, entry, cwd)) {
+				rights.set(`${access}:${right.path}:${right.scope}`, right);
+			}
+		}
 	}
 	return [...rights.values()];
 }
 
-function configRight(
+function configRights(
 	access: "read" | "write",
 	entry: string,
 	cwd: string,
-): SandboxFilesystemRight | undefined {
+): SandboxFilesystemRight[] {
+	if (entry === ":development_storage") {
+		return hostDevelopmentPaths()
+			.filter((entry) => access === "read" || entry.writable)
+			.map(({ path, directory }) => ({
+				access,
+				path,
+				scope: directory ? "tree" : "file",
+				missing_path: "reject",
+			}));
+	}
 	let path: string;
-	if (entry === ":root") return undefined;
+	if (entry === ":root") return [];
 	if (entry === "." || entry === ":workspace_roots") path = cwd;
 	else if (entry === ":tmpdir") path = canonicalize(tmpdir());
 	else if (entry === ":slash_tmp") path = canonicalize("/tmp");
-	else if (entry.startsWith(":")) return undefined;
+	else if (entry.startsWith(":")) return [];
 	else if (containsGlob(entry)) {
 		throw new Error(`Native sandbox read/write roots cannot contain globs: ${entry}`);
 	} else path = resolvePermissionPath(entry, cwd);
 
-	if (access === "read" && !existsSync(path)) return undefined;
+	if (access === "read" && !existsSync(path)) return [];
 	const directory = path === "/" || !existsSync(path) || statSync(path).isDirectory();
-	return {
+	return [{
 		access,
 		path,
 		scope: directory ? "tree" : "file",
@@ -152,7 +165,7 @@ function configRight(
 			: directory
 				? "create_tree"
 				: "create_file",
-	};
+	}];
 }
 
 function permissionRight(permission: NativeFilePermission): SandboxFilesystemRight {
@@ -188,7 +201,12 @@ function denyRules(
 		}
 	}
 	const actualCwd = canonicalize(cwd);
-	const excludedDynamicRoots = [actualCwd, canonicalize(tmpdir()), canonicalize("/tmp")];
+	const excludedDynamicRoots = [
+		actualCwd,
+		canonicalize(tmpdir()),
+		canonicalize("/tmp"),
+		...hostDevelopmentPaths().map((entry) => entry.path),
+	];
 	const externalTrees = new Set([
 		...baseRights(config, cwd)
 			.filter((right) => right.scope === "tree")

@@ -53,6 +53,8 @@ test("global config extends defaults without dropping hard rules", () => {
 		}),
 	);
 	assert(result.filesystem?.allowWrite?.includes("."));
+	assert(result.filesystem?.allowRead?.includes(":development_storage"));
+	assert(result.filesystem?.allowWrite?.includes(":development_storage"));
 	assert(result.filesystem?.allowWrite?.includes("/state"));
 	assert(result.filesystem?.denyRead?.includes("~/.ssh"));
 	assert(result.filesystem?.denyRead?.includes("~/.config/pi-nono"));
@@ -86,6 +88,7 @@ test("shell environment preserves the active development shell and removes secre
 	assert.equal(environment.API_TOKEN, undefined);
 	assert.equal(environment.DATABASE_PASSWORD, undefined);
 	assert.equal(environment.UNRELATED, undefined);
+	assert.equal(environment.PYTHONDONTWRITEBYTECODE, "1");
 });
 
 test("rejects malformed config instead of weakening policy", () => {

@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { basename, isAbsolute, relative, resolve, sep } from "node:path";
+import { hostDevelopmentPaths } from "./host-development-paths.ts";
 import type { NativeSandboxConfig } from "./sandbox-config.ts";
 import {
 	canonicalize,
@@ -18,6 +19,9 @@ export function isBaseReadAllowed(
 	const actual = canonicalize(path);
 	return (config.filesystem?.allowRead ?? []).some((root) => {
 		if (root === ":root") return true;
+		if (root === ":development_storage") {
+			return hostDevelopmentPaths().some((entry) => isInside(entry.path, actual));
+		}
 		if (root === ":workspace_roots" || root === ".") {
 			return isInside(canonicalize(cwd), actual);
 		}
@@ -36,6 +40,9 @@ export function isBaseWriteAllowed(
 	const actual = canonicalize(path);
 	if (isDefaultWritePath(actual, cwd)) return true;
 	return (config.filesystem?.allowWrite ?? []).some((root) => {
+		if (root === ":development_storage") {
+			return hostDevelopmentPaths().some((entry) => entry.writable && isInside(entry.path, actual));
+		}
 		if (root === "." || root === ":workspace_roots") {
 			return isInside(canonicalize(cwd), actual);
 		}

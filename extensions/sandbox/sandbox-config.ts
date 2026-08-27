@@ -48,7 +48,7 @@ export const DEFAULT_CONFIG: Required<
 		allowAllUnixSockets: false,
 	},
 	filesystem: {
-		allowRead: ["."],
+		allowRead: [".", ":development_storage"],
 		denyRead: [
 			"~/.ssh",
 			"~/.aws",
@@ -60,7 +60,7 @@ export const DEFAULT_CONFIG: Required<
 			"**/.env.*",
 			"**/*.key",
 		],
-		allowWrite: [".", ":tmpdir", ":slash_tmp"],
+		allowWrite: [".", ":tmpdir", ":slash_tmp", ":development_storage"],
 		denyWrite: [
 			".git",
 			".pi",
@@ -78,7 +78,7 @@ export const DEFAULT_CONFIG: Required<
 		ignoreDefaultExcludes: false,
 		exclude: [],
 		includeOnly: [],
-		set: {},
+		set: { PYTHONDONTWRITEBYTECODE: "1" },
 	},
 };
 

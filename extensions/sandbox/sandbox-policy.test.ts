@@ -83,6 +83,33 @@ test("maps current base rights and command-local folder grants", () => {
 	);
 });
 
+test("existing host development caches become base rights without creating missing caches", () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-sandbox-policy-cache-"));
+	const bunBin = join(homedir(), ".bun", "bin");
+	const npmCache = join(homedir(), ".npm");
+	const missingCache = join(homedir(), ".cache", "uv");
+	mkdirSync(bunBin, { recursive: true });
+	mkdirSync(npmCache, { recursive: true });
+	const request = buildSandboxExecRequest(
+		"cache-rights",
+		"true",
+		cwd,
+		undefined,
+		DEFAULT_CONFIG,
+		[],
+		[],
+		[],
+		sourceEnvironment,
+	);
+	assert(request.policy.base_rights.some((right) =>
+		right.access === "write" && right.path === npmCache && right.scope === "tree"));
+	assert(request.policy.base_rights.some((right) =>
+		right.access === "read" && right.path === bunBin && right.scope === "tree"));
+	assert.equal(request.policy.base_rights.some((right) =>
+		right.access === "write" && right.path === bunBin), false);
+	assert.equal(request.policy.base_rights.some((right) => right.path === missingCache), false);
+});
+
 test("legacy :root read setting is ignored for nono", () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pi-sandbox-policy-"));
 	const request = buildSandboxExecRequest(
