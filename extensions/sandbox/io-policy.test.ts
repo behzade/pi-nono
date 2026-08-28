@@ -12,14 +12,14 @@ import {
 } from "./io-policy.ts";
 import { canonicalize } from "./io-permissions.ts";
 
-test("base rights allow workspace reads and workspace or temp writes", () => {
+test("base rights allow broad reads and workspace or temp writes", () => {
 	const root = mkdtempSync(join(tmpdir(), "pi-policy-"));
 	const workspace = join(root, "workspace");
 	mkdirSync(workspace);
 	const outside = canonicalize("/home/sandbox-user/pi-policy-outside/file.txt");
 
 	assert.equal(isBaseReadAllowed(join(workspace, "input.txt"), DEFAULT_CONFIG, workspace), true);
-	assert.equal(isBaseReadAllowed(outside, DEFAULT_CONFIG, workspace), false);
+	assert.equal(isBaseReadAllowed(outside, DEFAULT_CONFIG, workspace), true);
 	assert.equal(isBaseWriteAllowed(join(workspace, "out.txt"), DEFAULT_CONFIG, workspace), true);
 	assert.equal(isBaseWriteAllowed(join(tmpdir(), "out.txt"), DEFAULT_CONFIG, workspace), true);
 	assert.equal(isBaseWriteAllowed(outside, DEFAULT_CONFIG, workspace), false);
@@ -32,7 +32,6 @@ test("base rights allow workspace reads and workspace or temp writes", () => {
 
 test("existing host development caches are readable and writable by default", () => {
 	const workspace = "/work";
-	mkdirSync(join(homedir(), ".bun", "bin"), { recursive: true });
 	mkdirSync(join(homedir(), ".cargo", "registry"), { recursive: true });
 	mkdirSync(join(homedir(), ".npm"), { recursive: true });
 	mkdirSync(join(homedir(), ".cache", "zig"), { recursive: true });
@@ -44,15 +43,11 @@ test("existing host development caches are readable and writable by default", ()
 		assert.equal(isBaseReadAllowed(path, DEFAULT_CONFIG, workspace), true, path);
 		assert.equal(isBaseWriteAllowed(path, DEFAULT_CONFIG, workspace), true, path);
 	}
-	const bunExecutable = join(homedir(), ".bun", "bin", "bun");
-	assert.equal(isBaseReadAllowed(bunExecutable, DEFAULT_CONFIG, workspace), true);
-	assert.equal(isBaseWriteAllowed(bunExecutable, DEFAULT_CONFIG, workspace), false);
 	assert.equal(
 		isBaseWriteAllowed(join(homedir(), ".cache", "unknown-tool", "entry"), DEFAULT_CONFIG, workspace),
-		false,
+		true,
 	);
-	const linkedTarget = join(homedir(), "linked-cache-target");
-	mkdirSync(linkedTarget);
+	const linkedTarget = "/etc";
 	mkdirSync(join(homedir(), ".cache"), { recursive: true });
 	symlinkSync(linkedTarget, join(homedir(), ".cache", "pip"));
 	assert.equal(isBaseWriteAllowed(join(homedir(), ".cache", "pip", "entry"), DEFAULT_CONFIG, workspace), false);

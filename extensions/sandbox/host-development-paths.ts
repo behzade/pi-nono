@@ -5,84 +5,12 @@ import { resolve } from "node:path";
 export interface HostDevelopmentPath {
 	path: string;
 	directory: boolean;
-	writable: boolean;
 }
 
-const READ_ONLY_PATHS = [
-	".bun/bin",
-	".cargo/bin",
-	".local/state/nix/profiles",
-	".rustup/toolchains",
-] as const;
-
-const XDG_CACHE_NAMES = [
-	".bun/install",
-	"bazel",
-	"bazel-repo-cache",
-	"bazel-repo-contents-cache",
-	"bluwy-giget",
-	"buf",
-	"bun",
-	"ccache",
-	"composer",
-	"Cypress",
-	"deno",
-	"devbox",
-	"fontconfig",
-	"go-build",
-	"gpui-libghostty",
-	"ms-playwright",
-	"nix",
-	"node/corepack",
-	"org.swift.swiftpm",
-	"pip",
-	"pipx",
-	"pnpm",
-	"pre-commit",
-	"puppeteer",
-	"pypoetry",
-	"sccache",
-	"selenium",
-	"tree-sitter",
-	"treefmt",
-	"ty",
-	"typescript",
-	"uv",
-	"vscode-ripgrep",
-	"yarn",
-	"yt-dlp",
-	"zig",
-] as const;
-
-const MACOS_CACHE_NAMES = [
-	"bazel",
-	"CocoaPods",
-	"com.apple.DeveloperTools",
-	"Cypress",
-	"deno",
-	"dev.biomejs.biome",
-	"engram/tree-sitter",
-	"go",
-	"go-build",
-	"gpui-libghostty",
-	"Homebrew",
-	"Mozilla.sccache",
-	"ms-playwright",
-	"node/corepack",
-	"org.swift.swiftpm",
-	"pip",
-	"pipx",
-	"pre-commit",
-	"puppeteer",
-	"pypoetry",
-	"selenium",
-	"uv",
-	"Yarn",
-	"zig",
-] as const;
-
 const READ_WRITE_PATHS = [
-	...XDG_CACHE_NAMES.map((name) => `.cache/${name}`),
+	".cache",
+	".local/state",
+	".config/jj",
 	".bun/install/cache",
 	".cargo/.package-cache",
 	".cargo/.package-cache-mutate",
@@ -103,8 +31,8 @@ const READ_WRITE_PATHS = [
 	".yarn/berry/mirror",
 	".yarn/berry/virtual",
 	"go/pkg/mod",
-	...MACOS_CACHE_NAMES.map((name) => `Library/Caches/${name}`),
-	"Library/Logs/CoreSimulator",
+	"Library/Caches",
+	"Library/Logs",
 	"Library/pnpm/store",
 ] as const;
 
@@ -116,17 +44,10 @@ export function hostDevelopmentPaths(home = homedir()): HostDevelopmentPath[] {
 	} catch {
 		return [];
 	}
-	return [
-		...existingPaths(root, READ_ONLY_PATHS, false),
-		...existingPaths(root, READ_WRITE_PATHS, true),
-	];
+	return existingPaths(root, READ_WRITE_PATHS);
 }
 
-function existingPaths(
-	root: string,
-	entries: readonly string[],
-	writable: boolean,
-): HostDevelopmentPath[] {
+function existingPaths(root: string, entries: readonly string[]): HostDevelopmentPath[] {
 	return entries.flatMap((entry) => {
 		let path = root;
 		let metadata: ReturnType<typeof lstatSync> | undefined;
@@ -139,6 +60,6 @@ function existingPaths(
 			}
 			if (metadata.isSymbolicLink()) return [];
 		}
-		return metadata ? [{ path, directory: metadata.isDirectory(), writable }] : [];
+		return metadata ? [{ path, directory: metadata.isDirectory() }] : [];
 	});
 }

@@ -17,6 +17,7 @@ function request(network: SandboxExecRequest["policy"]["network"]): SandboxExecR
 		env: { PATH: "/bin", HOME: "/home/test" },
 		timeout_ms: null,
 		policy: {
+			filesystem_mode: "sandboxed",
 			base_rights: [
 				{ access: "read", path: "/work", scope: "tree", missing_path: "reject" },
 				{ access: "write", path: "/work", scope: "tree", missing_path: "reject" },
@@ -74,6 +75,24 @@ test("macOS grants Zig the exact machine trust-store file", () => {
 	assert.equal(linux.filesystem.read_file.includes(trustStore), false);
 	assert.equal(linux.filesystem.bypass_protection.includes(trustStore), false);
 	assert.equal(darwin.filesystem.read_file.includes("/Library/Keychains"), false);
+});
+
+test("full modes bypass filesystem protection and leave network unrestricted", () => {
+	const value = request({ mode: "full" });
+	value.policy.filesystem_mode = "full";
+	value.policy.base_rights = [
+		{ access: "read", path: "/", scope: "tree", missing_path: "reject" },
+		{ access: "write", path: "/", scope: "tree", missing_path: "reject" },
+	];
+	const profile = buildNonoProfile(value) as {
+		filesystem: { allow: string[]; read_file: string[]; bypass_protection: string[] };
+		network: { block: boolean; allow_domain: string[] };
+	};
+	assert.deepEqual(profile.filesystem.allow, ["/"]);
+	assert.deepEqual(profile.filesystem.bypass_protection, ["/"]);
+	assert.equal(profile.filesystem.read_file.includes("/"), false);
+	assert.equal(profile.network.block, false);
+	assert.deepEqual(profile.network.allow_domain, []);
 });
 
 test("profile maps exact hosts without enabling unrestricted network", () => {

@@ -21,10 +21,16 @@ test("machine domain denies remove conflicting machine and project hosts", () =>
 		allowedDomains: ["machine.example", "safe.example"],
 		deniedDomains: ["machine.example", "*.blocked.example", "**.denied.example"],
 	});
-	assert.deepEqual(runtimeNetworkHosts(config, [
+	const hosts = runtimeNetworkHosts(config, [
 		"build.blocked.example",
 		"denied.example",
 		"nested.denied.example",
 		"project.example",
-	]), ["project.example", "safe.example"]);
+	]);
+	assert(hosts.includes("project.example"));
+	assert(hosts.includes("safe.example"));
+	assert.equal(hosts.includes("machine.example"), false);
+	assert.equal(hosts.includes("build.blocked.example"), false);
+	assert.equal(hosts.includes("denied.example"), false);
+	assert.equal(hosts.includes("nested.denied.example"), false);
 });

@@ -38,6 +38,7 @@ test("rejects writable grants whose future denied paths cannot be mounted", () =
 		const request = {
 			cwd: root,
 			policy: {
+				filesystem_mode: "sandboxed",
 				base_rights: [],
 				grants: [{ access: "write", path: root, scope: "tree", missing_path: "reject" }],
 				denies: [{ access: "read_write", pattern: `${root}/**/.env`, scope: "glob" }],
@@ -69,6 +70,7 @@ test("wraps nono with fixed bubblewrap deny mounts", () => {
 		const request = {
 			cwd: root,
 			policy: {
+				filesystem_mode: "sandboxed",
 				base_rights: [],
 				grants: [],
 				denies: [{ access: "read_write", pattern: denied, scope: "file" }],

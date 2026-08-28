@@ -223,7 +223,10 @@ export function buildNonoProfile(
 	const runtimeTrustFiles = platform === "darwin"
 		? ["/Library/Keychains/System.keychain"]
 		: [];
-	const protectionBypassFiles = [...runtimeConfigFiles, ...runtimeTrustFiles];
+	const runtimeReadFiles = [...runtimeConfigFiles, ...runtimeTrustFiles];
+	const protectionBypassPaths = request.policy.filesystem_mode === "full"
+		? ["/"]
+		: [...runtimeReadFiles, ...runtimeConfigDirectories];
 	const seatbeltDenies = request.policy.denies;
 	const filesystem = {
 		allow: rightPaths(rights, "write", "tree"),
@@ -239,21 +242,22 @@ export function buildNonoProfile(
 		read_file: [...new Set([
 			...rightPaths(rights, "read", "file"),
 			...runtimeDeviceFiles,
-			...protectionBypassFiles,
+			...runtimeReadFiles,
 		])].sort(),
-		bypass_protection: [...protectionBypassFiles, ...runtimeConfigDirectories],
+		bypass_protection: protectionBypassPaths,
 		unix_socket: [...request.policy.unix_socket_roots].sort(),
 		deny: platform === "linux"
 			? []
 			: [...new Set(seatbeltDenies.map((deny) => deny.pattern))].sort(),
 	};
 	const network = request.policy.network;
+	const unrestrictedNetwork = network.mode === "full";
 	const allowedHosts = network.mode === "proxy" ? network.allowed_hosts : [];
-	const localPorts = network.mode === "blocked"
-		? []
-		: network.mode === "loopback"
-			? network.ports
-			: network.local_ports;
+	const localPorts = network.mode === "loopback"
+		? network.ports
+		: network.mode === "proxy"
+			? network.local_ports
+			: [];
 	return {
 		$schema: "https://nono.sh/schemas/nono-profile.schema.json",
 		extends: "default",
@@ -264,7 +268,7 @@ export function buildNonoProfile(
 		},
 		filesystem,
 		network: {
-			block: allowedHosts.length === 0,
+			block: !unrestrictedNetwork && allowedHosts.length === 0,
 			allow_domain: allowedHosts,
 			...(localPorts.length > 0 ? { open_port: localPorts } : {}),
 		},

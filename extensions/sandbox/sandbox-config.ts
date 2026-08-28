@@ -1,8 +1,28 @@
 import { isIP } from "node:net";
 import { normalizeNetworkHost } from "./io-permissions.ts";
 
+export type FilesystemAccessMode = "read-only" | "sandboxed" | "full";
+export type NetworkAccessMode = "sandboxed" | "full";
+
+export function parseFilesystemAccessMode(
+	value: unknown,
+	field = "filesystem mode",
+): FilesystemAccessMode {
+	if (value === "read-only" || value === "sandboxed" || value === "full") return value;
+	throw new Error(`${field} must be read-only, sandboxed, or full`);
+}
+
+export function parseNetworkAccessMode(
+	value: unknown,
+	field = "network mode",
+): NetworkAccessMode {
+	if (value === "sandboxed" || value === "full") return value;
+	throw new Error(`${field} must be sandboxed or full`);
+}
+
 export interface NativeSandboxNetworkConfig {
 	enabled?: boolean;
+	mode?: NetworkAccessMode;
 	allowedDomains?: string[];
 	deniedDomains?: string[];
 	allowUnixSockets?: string[];
@@ -10,6 +30,7 @@ export interface NativeSandboxNetworkConfig {
 }
 
 export interface NativeSandboxFilesystemConfig {
+	mode?: FilesystemAccessMode;
 	allowRead?: string[];
 	denyRead?: string[];
 	allowWrite?: string[];
@@ -42,22 +63,80 @@ export const DEFAULT_CONFIG: Required<
 	backend: "nono",
 	network: {
 		enabled: true,
-		allowedDomains: [],
+		mode: "sandboxed",
+		allowedDomains: [
+			"localhost",
+			"127.0.0.1",
+			"::1",
+			"github.com",
+			"api.github.com",
+			"codeload.github.com",
+			"objects.githubusercontent.com",
+			"pkg-containers.githubusercontent.com",
+			"release-assets.githubusercontent.com",
+			"raw.githubusercontent.com",
+			"ghcr.io",
+			"registry.npmjs.org",
+			"nodejs.org",
+			"npm.pkg.github.com",
+			"crates.io",
+			"index.crates.io",
+			"static.crates.io",
+			"static.rust-lang.org",
+			"pypi.org",
+			"files.pythonhosted.org",
+			"proxy.golang.org",
+			"sum.golang.org",
+			"go.dev",
+			"storage.googleapis.com",
+			"repo1.maven.org",
+			"repo.maven.apache.org",
+			"plugins.gradle.org",
+			"services.gradle.org",
+			"downloads.gradle.org",
+			"repo.gradle.org",
+			"downloads.apache.org",
+			"api.nuget.org",
+			"rubygems.org",
+			"index.rubygems.org",
+			"repo.packagist.org",
+			"deno.land",
+			"jsr.io",
+			"ziglang.org",
+			"formulae.brew.sh",
+			"cache.nixos.org",
+			"channels.nixos.org",
+			"tarballs.nixos.org",
+			"deps.files.ghostty.org",
+		],
 		deniedDomains: [],
 		allowUnixSockets: [],
 		allowAllUnixSockets: false,
 	},
 	filesystem: {
-		allowRead: [".", ":development_storage"],
+		mode: "sandboxed",
+		allowRead: [":root"],
 		denyRead: [
 			"~/.ssh",
 			"~/.aws",
+			"~/.azure",
 			"~/.gnupg",
+			"~/.kube",
+			"~/.docker",
+			"~/.netrc",
+			"~/.npmrc",
+			"~/.pypirc",
+			"~/.config/gcloud",
+			"~/.config/gh",
+			"~/.config/glab-cli",
 			"~/.config/pi-nono",
+			"~/.config/opencode",
 			"~/.pi/agent/auth.json",
+			"~/.claude",
 			"~/.codex/auth.json",
 			"**/.env",
 			"**/.env.*",
+			"**/*.pem",
 			"**/*.key",
 		],
 		allowWrite: [".", ":tmpdir", ":slash_tmp", ":development_storage"],
@@ -69,7 +148,9 @@ export const DEFAULT_CONFIG: Required<
 			"**/*.pem",
 			"**/*.key",
 			"~/.config/pi-nono",
+			"~/.local/state/nix/profiles",
 			"~/.pi",
+			"~/.claude",
 			"~/.codex",
 		],
 	},
@@ -81,6 +162,26 @@ export const DEFAULT_CONFIG: Required<
 		set: { PYTHONDONTWRITEBYTECODE: "1" },
 	},
 };
+
+export function filesystemAccessMode(config: NativeSandboxConfig): FilesystemAccessMode {
+	return config.filesystem?.mode ?? "sandboxed";
+}
+
+export function networkAccessMode(config: NativeSandboxConfig): NetworkAccessMode {
+	return config.network?.mode ?? "sandboxed";
+}
+
+export function withAccessModes(
+	config: NativeSandboxConfig,
+	files: FilesystemAccessMode,
+	network: NetworkAccessMode,
+): NativeSandboxConfig {
+	return {
+		...config,
+		filesystem: { ...config.filesystem, mode: files },
+		network: { ...config.network, mode: network },
+	};
+}
 
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const DEFAULT_SECRET_ENV_PATTERNS = [
@@ -381,7 +482,22 @@ export function mergeGlobalConfig(
 	return {
 		...defaults,
 		...defined(override),
-		network: { ...defaults.network, ...defined(override.network) },
+		network: {
+			...defaults.network,
+			...defined(override.network),
+			allowedDomains: unique([
+				...(defaults.network?.allowedDomains ?? []),
+				...(override.network?.allowedDomains ?? []),
+			]),
+			deniedDomains: unique([
+				...(defaults.network?.deniedDomains ?? []),
+				...(override.network?.deniedDomains ?? []),
+			]),
+			allowUnixSockets: unique([
+				...(defaults.network?.allowUnixSockets ?? []),
+				...(override.network?.allowUnixSockets ?? []),
+			]),
+		},
 		filesystem: {
 			...defaults.filesystem,
 			...defined(override.filesystem),

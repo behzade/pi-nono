@@ -24,9 +24,14 @@ import { ActiveAccessPolicy } from "./active-access-policy.ts";
 import { registerAccessRequest } from "./access-request.ts";
 import {
 	DEFAULT_CONFIG,
+	filesystemAccessMode,
 	type NativeSandboxConfig,
 	mergeGlobalConfig,
+	networkAccessMode,
 	normalizeConfig,
+	parseFilesystemAccessMode,
+	parseNetworkAccessMode,
+	withAccessModes,
 } from "./sandbox-config.ts";
 import {
 	canonicalize,
@@ -96,6 +101,16 @@ export default function (pi: ExtensionAPI) {
 		description: "Disable OS-level sandboxing for bash commands",
 		type: "boolean",
 		default: false,
+	});
+	pi.registerFlag("sandbox-files", {
+		description: "Filesystem access: read-only, sandboxed, or full",
+		type: "string",
+		default: "sandboxed",
+	});
+	pi.registerFlag("sandbox-network", {
+		description: "Network access: sandboxed or full",
+		type: "string",
+		default: "sandboxed",
 	});
 
 	const localCwd = process.cwd();
@@ -207,6 +222,10 @@ export default function (pi: ExtensionAPI) {
 	pi.on("tool_call", async (event, ctx) => {
 		if (sandboxState.kind === "disabled") return;
 		if (!["read", "write", "edit", "grep", "find", "ls"].includes(event.toolName)) return;
+		if (
+			sandboxState.kind === "ready" &&
+			filesystemAccessMode(activeConfig(sandboxState)) === "full"
+		) return;
 		if (event.toolName === "grep" || event.toolName === "find") {
 			return {
 				block: true,
@@ -219,6 +238,12 @@ export default function (pi: ExtensionAPI) {
 		const access = event.toolName === "write" || event.toolName === "edit" ? "write" : "read";
 		const synchronizedPolicy = synchronizeAccess();
 		const config = activeConfig(sandboxState);
+		if (filesystemAccessMode(config) === "read-only" && access === "write") {
+			return {
+				block: true,
+				reason: `Files are read-only. Change Files to Sandboxed or Full before writing ${path}.`,
+			};
+		}
 		if (
 			isProtectedPath(lexicalPath) ||
 			(access === "write" && isProtectedWritePath(lexicalPath)) ||
@@ -288,10 +313,22 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 		try {
-			const machineConfig = readGlobalConfig();
+			const machineConfig = withAccessModes(
+				readGlobalConfig(),
+				parseFilesystemAccessMode(pi.getFlag("sandbox-files"), "--sandbox-files"),
+				parseNetworkAccessMode(pi.getFlag("sandbox-network"), "--sandbox-network"),
+			);
 			if (!machineConfig.enabled) {
 				sandboxState = { kind: "disabled", reason: "disabled via global config" };
 				ctx.ui.notify("Sandbox disabled via global config", "warning");
+				return;
+			}
+			if (
+				filesystemAccessMode(machineConfig) === "full" &&
+				networkAccessMode(machineConfig) === "full"
+			) {
+				sandboxState = { kind: "disabled", reason: "full file and network access selected" };
+				ctx.ui.setStatus("sandbox", ctx.ui.theme.fg("warning", "Sandbox off · full access"));
 				return;
 			}
 			const sessionFile = ctx.sessionManager.getSessionFile();
@@ -362,14 +399,17 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 			const access = activeAccess();
+			const networkMode = networkAccessMode(access.effective.config);
 			ctx.ui.notify([
 				"OS sandbox (nono):",
+				`  Files: ${filesystemAccessMode(access.effective.config)}`,
+				`  Network: ${networkMode}`,
 				`  Project policy: ${projectPolicyPath(ctx.cwd)}`,
 				`  Project rights: ${access.project.policy.rights.map(rightLabel).join(", ") || "(none)"}`,
 				`  Session rights: ${access.session.policy.rights.map(rightLabel).join(", ") || "(none)"}`,
 				`  Session policy: ${access.sessionIdentity ? sessionPolicyPath(access.sessionIdentity) : "ephemeral"}`,
-				`  Network hosts: ${networkHosts().join(", ") || "(blocked)"}`,
-				`  Loopback ports: ${access.effective.localPorts.join(", ") || "(blocked)"}`,
+				`  Network hosts: ${networkMode === "full" ? "(unrestricted)" : networkHosts().join(", ") || "(blocked)"}`,
+				`  Loopback ports: ${networkMode === "full" ? "(unrestricted)" : access.effective.localPorts.join(", ") || "(blocked)"}`,
 				...(access.effective.inactive.length > 0
 					? ["  Inactive grants:", ...access.effective.inactive.map((entry) => `    - ${entry}`)]
 					: []),

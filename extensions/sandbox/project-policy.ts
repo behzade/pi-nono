@@ -1,7 +1,11 @@
 import { existsSync, lstatSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, normalize, relative, resolve, sep } from "node:path";
-import type { NativeSandboxConfig } from "./sandbox-config.ts";
+import {
+	filesystemAccessMode,
+	networkAccessMode,
+	type NativeSandboxConfig,
+} from "./sandbox-config.ts";
 import {
 	canonicalize,
 	gitControlRoot,
@@ -10,11 +14,16 @@ import {
 	isProtectedPath,
 	isProtectedWritePath,
 	normalizeNetworkHost,
+	permissionCoversPath,
 	projectControlRoot,
 	type IoPermission,
 } from "./io-permissions.ts";
-import { isDeniedByConfig } from "./io-policy.ts";
-import { networkRuleMatches } from "./network-policy.ts";
+import {
+	isBaseReadAllowed,
+	isBaseWriteAllowed,
+	isDeniedByConfig,
+} from "./io-policy.ts";
+import { networkRuleMatches, runtimeNetworkHosts } from "./network-policy.ts";
 import {
 	projectPolicyPath,
 	readProjectPolicySource,
@@ -210,13 +219,22 @@ function addAccess(
 
 	const requestedRights = requests.map((request) =>
 		normalizeRequestedRight(request, cwd, allowAbsolutePaths));
+	if (
+		filesystemAccessMode(globalConfig) === "read-only" &&
+		requestedRights.some((right) => right.kind === "filesystem" && right.access === "write")
+	) {
+		throw new Error("Filesystem writes cannot be granted while Files is Read-only");
+	}
 
 	const currentNormalized = normalizeAccessPolicy(current, allowAbsolutePaths);
-	const currentKeys = new Set(currentNormalized.rights.map(rightKey));
+	const currentActive = allowAbsolutePaths
+		? activateSessionPolicy(currentNormalized, cwd, globalConfig)
+		: activateProjectPolicy(currentNormalized, cwd, globalConfig);
 	const uniqueRequestedRights = [...new Map(
 		requestedRights.map((right) => [rightKey(right), right]),
 	).values()];
-	const netNewRights = uniqueRequestedRights.filter((right) => !currentKeys.has(rightKey(right)));
+	const netNewRights = uniqueRequestedRights.filter((right) =>
+		!rightAlreadyAllowed(right, currentActive, cwd, globalConfig));
 	assertNoGiantSiblingFileList(netNewRights);
 	const candidate = normalizeAccessPolicy({
 		...currentNormalized,
@@ -225,6 +243,41 @@ function addAccess(
 	return allowAbsolutePaths
 		? activateSessionPolicy(candidate, cwd, globalConfig)
 		: activateProjectPolicy(candidate, cwd, globalConfig);
+}
+
+function rightAlreadyAllowed(
+	request: ProjectAccessRight,
+	active: ActiveProjectPolicy,
+	cwd: string,
+	config: NativeSandboxConfig,
+): boolean {
+	if (request.kind === "network_host") {
+		return networkAccessMode(config) === "full" ||
+			runtimeNetworkHosts(config, []).includes(request.host) ||
+			active.networkHosts.includes(request.host);
+	}
+	if (request.kind === "network_endpoint") {
+		return networkAccessMode(config) === "full" || active.localPorts.includes(request.port);
+	}
+
+	if (filesystemAccessMode(config) === "full") return true;
+	const lexical = expandPortablePath(request.path, cwd);
+	const actual = canonicalize(lexical);
+	if (active.filesystem.some((permission) =>
+		(permission.kind === request.access || (request.access === "read" && permission.kind === "write")) &&
+		permissionCoversPath(permission, actual))) {
+		return true;
+	}
+	if (
+		isProtectedPath(lexical) ||
+		(request.access === "write" && isProtectedWritePath(lexical)) ||
+		isDeniedByConfig(actual, request.access, config, cwd)
+	) {
+		return false;
+	}
+	return request.access === "read"
+		? isBaseReadAllowed(actual, config, cwd)
+		: isBaseWriteAllowed(actual, config, cwd);
 }
 
 export function requestsRequireSessionScope(

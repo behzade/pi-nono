@@ -85,7 +85,7 @@ test("broad grants retain nested machine denies", () => {
 	);
 	assert(request.policy.grants.some((right) => right.path === homedir() && right.scope === "tree"));
 	assert(request.policy.denies.some((deny) => deny.pattern === join(homedir(), ".ssh")));
-	assert(request.policy.denies.some((deny) => deny.pattern === `${homedir()}/**/.env`));
+	assert(request.policy.denies.some((deny) => deny.pattern === `${cwd}/**/.env`));
 
 	const homeWrite = activateProjectPolicy({
 		version: 1,
@@ -177,7 +177,7 @@ test("an approved update can repair a corrupt optional project-grants file", () 
 
 test("filesystem grants reject symlinks and type changes", () => {
 	const cwd = workspace();
-	const target = workspace();
+	const target = "/etc";
 	mkdirSync(join(cwd, "linked-parent"));
 	symlinkSync(target, join(cwd, "linked-parent", "link"));
 	assert.throws(() => addProjectAccess(basePolicy(), [{
@@ -214,24 +214,48 @@ test("project and session rights compose without widening", () => {
 
 test("request paths become portable while external absolutes remain session-only", () => {
 	const cwd = workspace();
-	const state = join(cwd, "state");
-	const shared = join(homedir(), "shared.txt");
-	const external = workspace();
-	mkdirSync(state);
-	writeFileSync(shared, "shared");
-	const active = addProjectAccess(basePolicy(), [
-		{ kind: "filesystem", access: "write", path: state, scope: "tree" },
-		{ kind: "filesystem", access: "read", path: shared, scope: "file" },
-	], cwd, machine);
-	assert(active.policy.rights.some((right) => right.kind === "filesystem" && right.path === "state"));
-	assert(active.policy.rights.some((right) => right.kind === "filesystem" && right.path === "~/shared.txt"));
+	mkdirSync(join(cwd, ".git"));
+	const active = addProjectAccess(basePolicy(), [{
+		kind: "filesystem", access: "write", path: join(cwd, ".git"), scope: "tree",
+	}], cwd, machine);
+	assert(active.policy.rights.some(
+		(right) => right.kind === "filesystem" && right.path === ".git"));
+
+	const external = "/etc";
 	const session = addSessionAccess(basePolicy(), [{
-		kind: "filesystem", access: "read", path: external, scope: "tree",
+		kind: "filesystem", access: "write", path: external, scope: "tree",
 	}], cwd, machine);
 	assert(session.filesystem.some((right) => right.path === external));
 	assert.throws(() => addProjectAccess(basePolicy(), [{
-		kind: "filesystem", access: "read", path: external, scope: "tree",
+		kind: "filesystem", access: "write", path: external, scope: "tree",
 	}], cwd, machine), /must be inside the project or home/);
+});
+
+test("access modes avoid redundant or ineffective grants", () => {
+	const cwd = workspace();
+	writeFileSync(join(cwd, "input.txt"), "input");
+	const defaults = addProjectAccess(basePolicy(), [
+		{ kind: "filesystem", access: "read", path: "input.txt", scope: "file" },
+		{ kind: "filesystem", access: "write", path: ".", scope: "tree" },
+		{ kind: "network_host", host: "registry.npmjs.org" },
+	], cwd, machine);
+	assert.deepEqual(defaults.policy.rights, []);
+
+	const readOnly = mergeGlobalConfig(machine, { filesystem: { mode: "read-only" } });
+	assert.throws(() => addProjectAccess(basePolicy(), [{
+		kind: "filesystem", access: "write", path: ".", scope: "tree",
+	}], cwd, readOnly), /Read-only/);
+
+	const full = mergeGlobalConfig(machine, {
+		filesystem: { mode: "full" },
+		network: { mode: "full" },
+	});
+	const external = "/etc";
+	const unrestricted = addSessionAccess(basePolicy(), [
+		{ kind: "filesystem", access: "write", path: external, scope: "tree" },
+		{ kind: "network_host", host: "example.com" },
+	], cwd, full);
+	assert.deepEqual(unrestricted.policy.rights, []);
 });
 
 test("approval summaries and diffs contain only validated net-new rights", () => {

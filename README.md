@@ -1,8 +1,8 @@
 # pi-nono
 
 pi-nono is a sandbox and permission system for the [Pi coding agent](https://pi.dev), powered by [nono](https://github.com/nolabs-ai/nono).
-It gives Pi workspace access by default and asks for approval when a task needs
-access to another file, service, or local port.
+It gives Pi broad safe reads, development writes, and common package-network
+access by default, then asks for approval only outside those boundaries.
 Unlike command-based sandboxes that allow or deny volatile scripts, pi-nono enforces permissions at stable I/O boundaries: files, network services, and local ports.
 
 > **Alpha:** pi-nono uses nono, which is still alpha upstream.
@@ -11,19 +11,21 @@ Unlike command-based sandboxes that allow or deny volatile scripts, pi-nono enfo
 
 | Resource | Default access |
 | --- | --- |
+| Computer files | Read, except protected credentials and secrets |
 | Workspace | Read and write |
 | System temporary directories | Read and write |
-| Existing package-manager caches | Read and write |
+| Existing user caches, logs, and state | Read and write |
+| Existing Jujutsu configuration | Read and write |
 | Workspace Git metadata | Read; write with explicit `.git` approval |
 | Workspace `.pi` control files | Read-only |
-| Remote hosts | Explicit host approval |
-| Loopback services | Explicit host and port approval |
+| GitHub and common package repositories | Allowed |
+| Other remote hosts | Explicit host approval |
+| Loopback HTTP hosts | Allowed through nono's proxy |
+| Raw loopback services | Explicit port approval |
 
 pi-nono does not create or redirect package-manager caches. It grants existing,
-symlink-free cache roots for common development tools at their normal host
-locations, plus read-only access to installed Cargo, Rustup, Bun, and Nix
-runtime roots. Unknown development storage still requires ordinary filesystem
-approval. Credentials, authentication files, `.env` files, private keys, and
+symlink-free cache, state, log, and development roots at their normal host
+locations. Credentials, authentication files, `.env` files, private keys, and
 pi-nono/Pi/Codex control paths remain protected.
 
 The policy covers Pi's built-in file tools and shell commands. A bash command
@@ -49,6 +51,20 @@ remains active. The `process` tool can wait for incremental output, write or
 close stdin, or send `INT`, `TERM`, or `KILL` to that process group. Sessions
 use piped stdio rather than a pseudo-terminal. Completion is delivered
 automatically, so agents do not need to poll.
+
+## Access modes
+
+Filesystem and network access are independent startup modes. Files can be
+`read-only`, `sandboxed` (the default), or `full`; network can be `sandboxed`
+(the default) or `full`. Pi GPUI exposes both axes in one composer menu and
+restarts the child process when either changes. The equivalent flags are
+`--sandbox-files <mode>` and `--sandbox-network <mode>`.
+
+Full mode removes pi-nono restrictions only for its selected axis. Selecting
+Full for both axes bypasses nono entirely; yielded sandbox process handles are
+then unavailable. Existing project and session grants remain stored and become
+active again when returning to sandboxed mode. Running processes retain the
+immutable mode and grants they started with.
 
 ## Permissions
 

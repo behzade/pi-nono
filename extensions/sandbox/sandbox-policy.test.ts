@@ -31,7 +31,7 @@ test("maps current base rights and command-local folder grants", () => {
 	assert.equal(request.timeout_ms, 30_000);
 	assert.ok(
 		request.policy.base_rights.some(
-			(right) => right.access === "read" && right.path === canonicalCwd && right.scope === "tree",
+			(right) => right.access === "read" && right.path === "/" && right.scope === "tree",
 		),
 	);
 	assert.ok(
@@ -41,17 +41,6 @@ test("maps current base rights and command-local folder grants", () => {
 				right.path === canonicalize(cwd) &&
 				right.scope === "tree",
 		),
-	);
-	const broadCacheRoots = [
-		canonicalize(join(homedir(), ".cargo")),
-		canonicalize(join(homedir(), ".npm")),
-		canonicalize(join(homedir(), "Library", "Caches")),
-	];
-	assert.equal(
-		request.policy.base_rights.some(
-			(right) => right.access === "write" && broadCacheRoots.includes(right.path),
-		),
-		false,
 	);
 	assert.deepEqual(request.policy.grants, [
 		{
@@ -83,13 +72,11 @@ test("maps current base rights and command-local folder grants", () => {
 	);
 });
 
-test("existing host development caches become base rights without creating missing caches", () => {
+test("base rights cover existing development caches without creating missing roots", () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pi-sandbox-policy-cache-"));
-	const bunBin = join(homedir(), ".bun", "bin");
-	const npmCache = join(homedir(), ".npm");
-	const missingCache = join(homedir(), ".cache", "uv");
-	mkdirSync(bunBin, { recursive: true });
-	mkdirSync(npmCache, { recursive: true });
+	const userCache = join(homedir(), ".cache");
+	const missingCache = join(userCache, "uv");
+	mkdirSync(userCache, { recursive: true });
 	const request = buildSandboxExecRequest(
 		"cache-rights",
 		"true",
@@ -102,34 +89,72 @@ test("existing host development caches become base rights without creating missi
 		sourceEnvironment,
 	);
 	assert(request.policy.base_rights.some((right) =>
-		right.access === "write" && right.path === npmCache && right.scope === "tree"));
-	assert(request.policy.base_rights.some((right) =>
-		right.access === "read" && right.path === bunBin && right.scope === "tree"));
-	assert.equal(request.policy.base_rights.some((right) =>
-		right.access === "write" && right.path === bunBin), false);
+		right.access === "write" && right.path === userCache && right.scope === "tree"));
 	assert.equal(request.policy.base_rights.some((right) => right.path === missingCache), false);
 });
 
-test("legacy :root read setting is ignored for nono", () => {
-	const cwd = mkdtempSync(join(tmpdir(), "pi-sandbox-policy-"));
-	const request = buildSandboxExecRequest(
-		"one",
+test("file and network modes shape immutable command policy", () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-sandbox-modes-"));
+	const readOnly = buildSandboxExecRequest(
+		"read-only",
 		"true",
 		cwd,
 		undefined,
 		{
 			...DEFAULT_CONFIG,
-			filesystem: {
-				...DEFAULT_CONFIG.filesystem,
-				allowRead: [":root"],
-			},
+			filesystem: { ...DEFAULT_CONFIG.filesystem, mode: "read-only" },
+		},
+		[{ kind: "write", path: cwd, directory: true }],
+		[],
+		[],
+		sourceEnvironment,
+	);
+	assert.equal(readOnly.policy.filesystem_mode, "read-only");
+	assert.equal(readOnly.policy.base_rights.some((right) => right.access === "write"), false);
+	assert.equal(readOnly.policy.grants.some((right) => right.access === "write"), false);
+
+	const full = buildSandboxExecRequest(
+		"full",
+		"true",
+		cwd,
+		undefined,
+		{
+			...DEFAULT_CONFIG,
+			filesystem: { ...DEFAULT_CONFIG.filesystem, mode: "full" },
+			network: { ...DEFAULT_CONFIG.network, mode: "full" },
 		},
 		[],
 		[],
 		[],
 		sourceEnvironment,
 	);
-	assert.equal(request.policy.base_rights.some((right) => right.path === "/"), false);
+	assert.equal(full.policy.filesystem_mode, "full");
+	assert(full.policy.base_rights.some(
+		(right) => right.access === "write" && right.path === "/" && right.scope === "tree"));
+	assert.deepEqual(full.policy.denies, []);
+	assert.deepEqual(full.policy.network, { mode: "full" });
+});
+
+test("prefix grants keep configured denies without synthesizing unusable external globs", () => {
+	const cwd = canonicalize(mkdtempSync(join(tmpdir(), "pi-sandbox-prefix-cwd-")));
+	const external = canonicalize(mkdtempSync(join(tmpdir(), "pi-sandbox-prefix-external-")));
+	const request = buildSandboxExecRequest(
+		"prefix",
+		"true",
+		cwd,
+		undefined,
+		DEFAULT_CONFIG,
+		[{ kind: "write", path: external, directory: true }],
+		[],
+		[],
+		sourceEnvironment,
+	);
+	assert(request.policy.grants.some(
+		(right) => right.access === "write" && right.path === external && right.scope === "tree"));
+	assert.equal(request.policy.denies.some(
+		(deny) => deny.scope === "glob" && deny.pattern.startsWith(`${external}/`)), false);
+	assert(request.policy.denies.some(
+		(deny) => deny.scope === "glob" && deny.pattern === `${cwd}/**/.env`));
 });
 
 test("missing configured read roots are omitted instead of becoming create rights", () => {

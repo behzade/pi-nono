@@ -10,12 +10,13 @@ import { hostDevelopmentPaths } from "./host-development-paths.ts";
 import {
 	DEFAULT_CONFIG,
 	buildShellEnvironment,
+	filesystemAccessMode,
 	mergeGlobalConfig,
+	networkAccessMode,
 	type NativeSandboxConfig,
 } from "./sandbox-config.ts";
 import {
 	canonicalize,
-	isInside,
 	type IoPermission,
 	resolvePermissionPath,
 } from "./io-permissions.ts";
@@ -51,6 +52,15 @@ export function buildSandboxExecRequest(
 		throw new Error("Native sandbox timeout must be finite and no more than 24 hours");
 	}
 	const actualCwd = canonicalize(cwd);
+	const fileMode = filesystemAccessMode(effective);
+	const networkMode = networkAccessMode(effective);
+	const base = fileMode === "full"
+		? [rootRight("read"), rootRight("write")]
+		: baseRights(effective, actualCwd);
+	const effectivePermissions = fileMode === "read-only"
+		? permissions.filter((permission) => permission.kind === "read")
+		: permissions;
+	const grants = fileMode === "full" ? [] : effectivePermissions.map(permissionRight);
 	return {
 		type: "exec",
 		id,
@@ -67,10 +77,13 @@ export function buildSandboxExecRequest(
 				: Math.max(1, Math.round(timeoutSeconds * 1000)),
 		interactive: false,
 		policy: {
-			base_rights: baseRights(effective, actualCwd),
-			grants: permissions.map(permissionRight),
-			denies: denyRules(effective, actualCwd, permissions),
-			network: networkHosts.length > 0
+			filesystem_mode: fileMode,
+			base_rights: base,
+			grants,
+			denies: fileMode === "full" ? [] : denyRules(effective, actualCwd, effectivePermissions),
+			network: networkMode === "full"
+				? { mode: "full" }
+				: networkHosts.length > 0
 				? {
 						mode: "proxy",
 						allowed_hosts: [...networkHosts],
@@ -83,6 +96,10 @@ export function buildSandboxExecRequest(
 			output_limit_bytes: OUTPUT_LIMIT_BYTES,
 		},
 	};
+}
+
+function rootRight(access: "read" | "write"): SandboxFilesystemRight {
+	return { access, path: "/", scope: "tree", missing_path: "reject" };
 }
 
 function hostBash(sourceEnvironment: SandboxSourceEnvironment): string {
@@ -118,7 +135,7 @@ function baseRights(
 	const rights = new Map<string, SandboxFilesystemRight>();
 	for (const [access, entries] of [
 		["read" as const, config.filesystem?.allowRead ?? []],
-		["write" as const, config.filesystem?.allowWrite ?? []],
+		["write" as const, filesystemAccessMode(config) === "read-only" ? [] : config.filesystem?.allowWrite ?? []],
 	] as const) {
 		for (const entry of entries) {
 			for (const right of configRights(access, entry, cwd)) {
@@ -136,8 +153,7 @@ function configRights(
 ): SandboxFilesystemRight[] {
 	if (entry === ":development_storage") {
 		return hostDevelopmentPaths()
-			.filter((entry) => access === "read" || entry.writable)
-			.map(({ path, directory }) => ({
+			.map(({ path, directory }): SandboxFilesystemRight => ({
 				access,
 				path,
 				scope: directory ? "tree" : "file",
@@ -145,8 +161,10 @@ function configRights(
 			}));
 	}
 	let path: string;
-	if (entry === ":root") return [];
-	if (entry === "." || entry === ":workspace_roots") path = cwd;
+	if (entry === ":root") {
+		if (access === "write") return [];
+		path = "/";
+	} else if (entry === "." || entry === ":workspace_roots") path = cwd;
 	else if (entry === ":tmpdir") path = canonicalize(tmpdir());
 	else if (entry === ":slash_tmp") path = canonicalize("/tmp");
 	else if (entry.startsWith(":")) return [];
@@ -198,29 +216,6 @@ function denyRules(
 						? "read_write"
 						: current?.access ?? access,
 			});
-		}
-	}
-	const actualCwd = canonicalize(cwd);
-	const excludedDynamicRoots = [
-		actualCwd,
-		canonicalize(tmpdir()),
-		canonicalize("/tmp"),
-		...hostDevelopmentPaths().map((entry) => entry.path),
-	];
-	const externalTrees = new Set([
-		...baseRights(config, cwd)
-			.filter((right) => right.scope === "tree")
-			.map((right) => right.path),
-		...permissions.filter((permission) => permission.directory).map((permission) => permission.path),
-	].filter((root) => !excludedDynamicRoots.some((excluded) => isInside(excluded, root))));
-	for (const root of externalTrees) {
-		for (const suffix of ["**/.env", "**/.env.*", "**/*.pem", "**/*.key"]) {
-			const deny: SandboxFilesystemDeny = {
-				access: "read_write",
-				pattern: `${root}/${suffix}`,
-				scope: "glob",
-			};
-			rules.set(`${deny.pattern}:${deny.scope}`, deny);
 		}
 	}
 	return [...rules.values()].filter((deny) => !permissions.some((permission) =>

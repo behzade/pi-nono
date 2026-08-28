@@ -53,14 +53,16 @@ test("global config extends defaults without dropping hard rules", () => {
 		}),
 	);
 	assert(result.filesystem?.allowWrite?.includes("."));
-	assert(result.filesystem?.allowRead?.includes(":development_storage"));
+	assert(result.filesystem?.allowRead?.includes(":root"));
 	assert(result.filesystem?.allowWrite?.includes(":development_storage"));
 	assert(result.filesystem?.allowWrite?.includes("/state"));
 	assert(result.filesystem?.denyRead?.includes("~/.ssh"));
 	assert(result.filesystem?.denyRead?.includes("~/.config/pi-nono"));
 	assert(result.filesystem?.denyWrite?.includes("~/.config/pi-nono"));
 	assert(result.filesystem?.denyRead?.includes("**/private.json"));
-	assert.deepEqual(result.network?.allowedDomains, ["grafana.example.com"]);
+	assert(result.network?.allowedDomains?.includes("github.com"));
+	assert(result.network?.allowedDomains?.includes("registry.npmjs.org"));
+	assert(result.network?.allowedDomains?.includes("grafana.example.com"));
 });
 
 test("shell environment preserves the active development shell and removes secret names", () => {

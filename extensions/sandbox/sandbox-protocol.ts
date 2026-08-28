@@ -32,10 +32,12 @@ export interface SandboxExecRequest {
 	timeout_ms: number | null;
 	interactive?: boolean;
 	policy: {
+		filesystem_mode: "read-only" | "sandboxed" | "full";
 		base_rights: SandboxFilesystemRight[];
 		grants: SandboxFilesystemRight[];
 		denies: SandboxFilesystemDeny[];
 		network:
+			| { mode: "full" }
 			| { mode: "blocked" }
 			| { mode: "loopback"; ports: number[] }
 			| {

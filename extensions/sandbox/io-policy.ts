@@ -41,7 +41,7 @@ export function isBaseWriteAllowed(
 	if (isDefaultWritePath(actual, cwd)) return true;
 	return (config.filesystem?.allowWrite ?? []).some((root) => {
 		if (root === ":development_storage") {
-			return hostDevelopmentPaths().some((entry) => entry.writable && isInside(entry.path, actual));
+			return hostDevelopmentPaths().some((entry) => isInside(entry.path, actual));
 		}
 		if (root === "." || root === ":workspace_roots") {
 			return isInside(canonicalize(cwd), actual);
