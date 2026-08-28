@@ -102,7 +102,7 @@ function rootRight(access: "read" | "write"): SandboxFilesystemRight {
 	return { access, path: "/", scope: "tree", missing_path: "reject" };
 }
 
-function hostBash(sourceEnvironment: SandboxSourceEnvironment): string {
+export function hostBash(sourceEnvironment: SandboxSourceEnvironment): string {
 	for (const directory of (sourceEnvironment.PATH ?? "").split(delimiter)) {
 		if (!directory) continue;
 		const candidate = join(directory, "bash");

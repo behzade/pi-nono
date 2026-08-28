@@ -51,7 +51,10 @@ import {
 	isDeniedByConfig,
 } from "./io-policy.ts";
 import { createNativeSandboxOps } from "./native-sandbox-ops.ts";
-import type { SandboxSourceEnvironment } from "./sandbox-policy.ts";
+import {
+	hostBash,
+	type SandboxSourceEnvironment,
+} from "./sandbox-policy.ts";
 import { runtimeNetworkHosts } from "./network-policy.ts";
 import {
 	registerApprovalSession,
@@ -92,6 +95,7 @@ function createCapturedLocalBash(
 	environment: SandboxSourceEnvironment,
 ) {
 	return createBashTool(cwd, {
+		shellPath: hostBash(environment),
 		spawnHook: (invocation) => ({
 			...invocation,
 			env: restoreCapturedShellEnvironment(environment, invocation.env),
