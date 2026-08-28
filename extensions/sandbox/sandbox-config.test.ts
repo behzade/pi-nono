@@ -5,6 +5,7 @@ import {
 	buildShellEnvironment,
 	mergeGlobalConfig,
 	normalizeConfig,
+	restoreCapturedShellEnvironment,
 } from "./sandbox-config.ts";
 
 test("nono is the only and default backend", () => {
@@ -91,6 +92,30 @@ test("shell environment preserves the active development shell and removes secre
 	assert.equal(environment.DATABASE_PASSWORD, undefined);
 	assert.equal(environment.UNRELATED, undefined);
 	assert.equal(environment.PYTHONDONTWRITEBYTECODE, "1");
+});
+
+test("disabled sandbox restores captured PATH with current session metadata", () => {
+	const environment = restoreCapturedShellEnvironment(
+		{
+			PATH: "/captured/cargo:/captured/git",
+			HOME: "/home/test",
+			PI_SESSION_ID: "stale",
+			PI_SESSION_FILE: "/stale/session.jsonl",
+		},
+		{
+			PATH: "/runtime/tools",
+			PI_SESSION_ID: "current",
+			PI_PROVIDER: "provider",
+			PI_MODEL: "model",
+		},
+	);
+
+	assert.equal(environment.PATH, "/captured/cargo:/captured/git");
+	assert.equal(environment.HOME, "/home/test");
+	assert.equal(environment.PI_SESSION_ID, "current");
+	assert.equal(environment.PI_SESSION_FILE, undefined);
+	assert.equal(environment.PI_PROVIDER, "provider");
+	assert.equal(environment.PI_MODEL, "model");
 });
 
 test("rejects malformed config instead of weakening policy", () => {

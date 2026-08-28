@@ -565,6 +565,27 @@ function matchesAny(name: string, patterns: readonly string[]): boolean {
 	return patterns.some((pattern) => globPattern(pattern).test(name));
 }
 
+const PI_SESSION_ENV_NAMES = [
+	"PI_SESSION_ID",
+	"PI_SESSION_FILE",
+	"PI_PROVIDER",
+	"PI_MODEL",
+	"PI_REASONING_LEVEL",
+] as const;
+
+export function restoreCapturedShellEnvironment(
+	captured: Readonly<NodeJS.ProcessEnv>,
+	invocation: Readonly<NodeJS.ProcessEnv>,
+): NodeJS.ProcessEnv {
+	const environment = { ...captured };
+	for (const name of PI_SESSION_ENV_NAMES) {
+		const value = invocation[name];
+		if (value === undefined) delete environment[name];
+		else environment[name] = value;
+	}
+	return environment;
+}
+
 export function buildShellEnvironment(
 	config: NativeSandboxConfig,
 	source: Readonly<NodeJS.ProcessEnv>,

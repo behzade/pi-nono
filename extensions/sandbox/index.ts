@@ -31,6 +31,7 @@ import {
 	normalizeConfig,
 	parseFilesystemAccessMode,
 	parseNetworkAccessMode,
+	restoreCapturedShellEnvironment,
 	withAccessModes,
 } from "./sandbox-config.ts";
 import {
@@ -85,6 +86,18 @@ function unavailableBashOps(reason: string): BashOperations {
 	return { async exec() { throw new Error(reason); } };
 }
 
+function createCapturedLocalBash(
+	cwd: string,
+	environment: SandboxSourceEnvironment,
+) {
+	return createBashTool(cwd, {
+		spawnHook: (invocation) => ({
+			...invocation,
+			env: restoreCapturedShellEnvironment(environment, invocation.env),
+		}),
+	});
+}
+
 type SandboxState =
 	| { kind: "disabled"; reason: string }
 	| { kind: "initializing" }
@@ -119,6 +132,7 @@ export default function (pi: ExtensionAPI) {
 	let accessPolicy: ActiveAccessPolicy | undefined;
 	let nonoClient: NonoClient | undefined;
 	let processSessions: NativeProcessSessions | undefined;
+	let sessionEnvironment: SandboxSourceEnvironment = Object.freeze({ ...process.env });
 	let userBashCounter = 0;
 	let sessionGeneration = 0;
 	let approvalContext: ExtensionContext | undefined;
@@ -199,7 +213,10 @@ export default function (pi: ExtensionAPI) {
 				if (snapshot.state === "failed" || snapshot.state === "exited") throw new Error(output);
 				return { content: [{ type: "text", text: output }], details: processSessionDetails(snapshot) };
 			}
-			if (sandboxState.kind === "disabled") return localBash.execute(id, params, signal, onUpdate);
+			if (sandboxState.kind === "disabled") {
+				return createCapturedLocalBash(localCwd, sessionEnvironment)
+					.execute(id, params, signal, onUpdate, ctx);
+			}
 			if (sandboxState.kind !== "ready") throw new Error(sandboxState.kind === "failed" ? sandboxState.reason : "Sandbox is still initializing; command blocked");
 			if (!nonoClient) throw new Error("Nono sandbox is not ready");
 			const policyAtStart = synchronizeAccess();
@@ -303,7 +320,7 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		const generation = ++sessionGeneration;
-		const sessionEnvironment: SandboxSourceEnvironment = Object.freeze({ ...process.env });
+		sessionEnvironment = Object.freeze({ ...process.env });
 		if (approvalContext) unregisterApprovalSession(approvalContext);
 		approvalContext = ctx;
 		registerApprovalSession(ctx);
