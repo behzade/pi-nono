@@ -60,7 +60,9 @@ test("global config extends defaults without dropping hard rules", () => {
 	assert(result.filesystem?.allowWrite?.includes("/state"));
 	assert(result.filesystem?.denyRead?.includes("~/.ssh"));
 	assert(result.filesystem?.denyRead?.includes("~/.config/pi-nono"));
+	assert(result.filesystem?.denyRead?.includes("~/.nono"));
 	assert(result.filesystem?.denyWrite?.includes("~/.config/pi-nono"));
+	assert(result.filesystem?.denyWrite?.includes("~/.nono"));
 	assert(result.filesystem?.denyRead?.includes("**/private.json"));
 	assert(result.network?.allowedDomains?.includes("github.com"));
 	assert(result.network?.allowedDomains?.includes("registry.npmjs.org"));

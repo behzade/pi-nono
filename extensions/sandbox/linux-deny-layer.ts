@@ -2,6 +2,7 @@ import {
 	chmodSync,
 	existsSync,
 	lstatSync,
+	mkdirSync,
 	readdirSync,
 	realpathSync,
 	statSync,
@@ -15,6 +16,8 @@ import type {
 } from "./sandbox-protocol.ts";
 
 const MAX_GLOB_MATCHES = 8_192;
+/** Private supervisor state mounted beneath Bubblewrap's synthetic /dev. */
+export const LINUX_NONO_HOME = "/dev/.pi-nono-state";
 
 interface ConcreteDeny {
 	access: SandboxFilesystemDeny["access"];
@@ -40,6 +43,8 @@ export function buildLinuxDenyLaunch(
 ): LinuxDenyLaunch {
 	assertRepresentableGrantDenies(request);
 	const denies = concreteDenies(request.policy.denies);
+	const nonoHome = join(privateDirectory, "nono-home");
+	mkdirSync(join(nonoHome, ".nono", "sessions"), { recursive: true, mode: 0o700 });
 	const args = [
 		"--new-session",
 		"--die-with-parent",
@@ -54,6 +59,9 @@ export function buildLinuxDenyLaunch(
 		"/",
 		"--dev",
 		"/dev",
+		"--bind",
+		nonoHome,
+		LINUX_NONO_HOME,
 		"--proc",
 		"/proc",
 	];

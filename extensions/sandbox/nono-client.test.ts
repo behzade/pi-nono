@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import type { SandboxExecRequest } from "./sandbox-protocol.ts";
 import { DEFAULT_CONFIG } from "./sandbox-config.ts";
-import { buildNonoProfile, NonoClient, sandboxCommandStdio } from "./nono-client.ts";
+import {
+	buildNonoProfile,
+	NonoClient,
+	prepareLinuxNonoLaunch,
+	sandboxCommandStdio,
+} from "./nono-client.ts";
+import { LINUX_NONO_HOME } from "./linux-deny-layer.ts";
 import { buildSandboxExecRequest } from "./sandbox-policy.ts";
 
 function request(network: SandboxExecRequest["policy"]["network"]): SandboxExecRequest {
@@ -77,22 +84,48 @@ test("macOS grants Zig the exact machine trust-store file", () => {
 	assert.equal(darwin.filesystem.read_file.includes("/Library/Keychains"), false);
 });
 
-test("full modes bypass filesystem protection and leave network unrestricted", () => {
+test("root access avoids Nono state on Linux and uses native protection on macOS", () => {
 	const value = request({ mode: "full" });
 	value.policy.filesystem_mode = "full";
 	value.policy.base_rights = [
 		{ access: "read", path: "/", scope: "tree", missing_path: "reject" },
 		{ access: "write", path: "/", scope: "tree", missing_path: "reject" },
 	];
-	const profile = buildNonoProfile(value) as {
+	const linux = buildNonoProfile(value, "linux") as {
+		allow_parent_of_protected?: boolean;
 		filesystem: { allow: string[]; read_file: string[]; bypass_protection: string[] };
 		network: { block: boolean; allow_domain: string[] };
 	};
-	assert.deepEqual(profile.filesystem.allow, ["/"]);
-	assert.deepEqual(profile.filesystem.bypass_protection, ["/"]);
-	assert.equal(profile.filesystem.read_file.includes("/"), false);
-	assert.equal(profile.network.block, false);
-	assert.deepEqual(profile.network.allow_domain, []);
+	const darwin = buildNonoProfile(value, "darwin") as {
+		allow_parent_of_protected: boolean;
+		filesystem: { allow: string[]; bypass_protection: string[] };
+	};
+
+	assert.equal(linux.filesystem.allow.includes("/"), false);
+	assert(linux.filesystem.allow.includes("/tmp"));
+	assert.equal(linux.filesystem.allow.includes("/dev"), false);
+	assert.equal(linux.filesystem.bypass_protection.includes("/"), false);
+	assert.equal(linux.allow_parent_of_protected, undefined);
+	assert.deepEqual(darwin.filesystem.allow, ["/"]);
+	assert(darwin.filesystem.bypass_protection.includes("/"));
+	assert.equal(darwin.allow_parent_of_protected, true);
+	assert.equal(linux.network.block, false);
+	assert.deepEqual(linux.network.allow_domain, []);
+});
+
+test("Linux Nono launch restores HOME only inside the sandboxed command", () => {
+	const launch = prepareLinuxNonoLaunch(
+		{ program: "/bin/sh", args: ["-c", 'printf "%s|%s" "$HOME" "${PI_NONO_CHILD_HOME-unset}"'] },
+		{ PATH: "/bin", HOME: "/home/test" },
+	);
+	assert.equal(launch.environment.HOME, LINUX_NONO_HOME);
+	assert.equal(launch.environment.PI_NONO_CHILD_HOME, "/home/test");
+	const result = spawnSync(launch.command.program, launch.command.args, {
+		env: launch.environment,
+		encoding: "utf8",
+	});
+	assert.equal(result.status, 0, result.stderr);
+	assert.equal(result.stdout, "/home/test|unset");
 });
 
 test("profile maps exact hosts without enabling unrestricted network", () => {

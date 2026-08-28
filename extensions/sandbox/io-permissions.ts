@@ -14,7 +14,7 @@ export interface IoPermission {
 	path: string;
 	directory: boolean;
 }
-const protectedHomeRoots = [".ssh", ".aws", ".gnupg", ".config/pi-nono"];
+const protectedHomeRoots = [".ssh", ".aws", ".gnupg", ".nono", ".config/pi-nono"];
 const protectedSystemRoots = ["/dev"];
 const protectedWriteRoots = [".pi", ".codex"];
 const protectedAuthFiles = [

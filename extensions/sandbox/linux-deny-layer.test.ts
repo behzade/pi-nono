@@ -7,6 +7,7 @@ import type { SandboxExecRequest, SandboxFilesystemDeny } from "./sandbox-protoc
 import {
 	buildLinuxDenyLaunch,
 	concreteLinuxDeniesForTest,
+	LINUX_NONO_HOME,
 } from "./linux-deny-layer.ts";
 
 test("expands workspace denies without following or scanning outside the static root", () => {
@@ -95,6 +96,10 @@ test("wraps nono with fixed bubblewrap deny mounts", () => {
 		]);
 		assert.ok(launch.args.includes(denied));
 		assert.ok(launch.args.includes("--ro-bind"));
+		const homeBind = launch.args.indexOf(LINUX_NONO_HOME);
+		assert(homeBind > 0);
+		assert.equal(launch.args[homeBind - 2], "--bind");
+		assert.equal(launch.args[homeBind - 1], join(root, "nono-home"));
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

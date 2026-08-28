@@ -7,7 +7,9 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	openSync,
+	readdirSync,
 	rmSync,
+	statSync,
 	writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -18,10 +20,14 @@ import type {
 	SandboxExecResult,
 	SandboxFilesystemRight,
 } from "./sandbox-protocol.ts";
-import { buildLinuxDenyLaunch } from "./linux-deny-layer.ts";
+import {
+	buildLinuxDenyLaunch,
+	LINUX_NONO_HOME,
+} from "./linux-deny-layer.ts";
 
 const READY_TIMEOUT_MS = 10_000;
 const SHUTDOWN_GRACE_MS = 500;
+const CHILD_HOME_HANDOFF = "PI_NONO_CHILD_HOME";
 
 export class NonoClientError extends Schema.TaggedError<NonoClientError>()(
 	"NonoClientError",
@@ -82,6 +88,9 @@ export class NonoClient {
 	): Promise<SandboxExecResult> {
 		if (this.#closed) return Promise.reject(new Error("nono sandbox client is closed"));
 		if (this.#pending.has(request.id)) return Promise.reject(new Error(`Duplicate command ID: ${request.id}`));
+		const sandboxLaunch = process.platform === "linux"
+			? prepareLinuxNonoLaunch(request.command, request.env)
+			: { command: request.command, environment: request.env };
 		const profileDirectory = mkdtempSync(join(tmpdir(), ".pi-nono-"));
 		const profilePath = join(profileDirectory, "profile.json");
 		const nonoArgs = [
@@ -90,8 +99,8 @@ export class NonoClient {
 			"--profile",
 			profilePath,
 			"--",
-			request.command.program,
-			...request.command.args,
+			sandboxLaunch.command.program,
+			...sandboxLaunch.command.args,
 		];
 		let launch: { program: string; args: string[] };
 		try {
@@ -117,7 +126,7 @@ export class NonoClient {
 		return new Promise((resolve, reject) => {
 			const child = spawn(launch.program, launch.args, {
 				cwd: request.cwd,
-				env: request.env,
+				env: sandboxLaunch.environment,
 				stdio: sandboxCommandStdio(request.interactive === true),
 				detached: true,
 			});
@@ -210,11 +219,38 @@ export class NonoClient {
 	}
 }
 
+/** Keep Nono state outside broad grants, then restore the application's HOME inside Bash. */
+export function prepareLinuxNonoLaunch(
+	command: SandboxExecRequest["command"],
+	environment: Readonly<NodeJS.ProcessEnv>,
+): { command: SandboxExecRequest["command"]; environment: NodeJS.ProcessEnv } {
+	if (command.args.length !== 2 || command.args[0] !== "-c") {
+		throw new Error("Linux Nono commands must use a shell with exactly one -c script");
+	}
+	const originalHome = environment.HOME;
+	const launchEnvironment = { ...environment, HOME: LINUX_NONO_HOME };
+	const restoreHome = originalHome === undefined
+		? `unset HOME ${CHILD_HOME_HANDOFF}`
+		: `export HOME="$${CHILD_HOME_HANDOFF}"\nunset ${CHILD_HOME_HANDOFF}`;
+	if (originalHome === undefined) delete launchEnvironment[CHILD_HOME_HANDOFF];
+	else launchEnvironment[CHILD_HOME_HANDOFF] = originalHome;
+	return {
+		command: {
+			program: command.program,
+			args: ["-c", `${restoreHome}\n${command.args[1]}`],
+		},
+		environment: launchEnvironment,
+	};
+}
+
 export function buildNonoProfile(
 	request: SandboxExecRequest,
 	platform: NodeJS.Platform = process.platform,
 ): Record<string, unknown> {
-	const rights = [...request.policy.base_rights, ...request.policy.grants];
+	const requestedRights = [...request.policy.base_rights, ...request.policy.grants];
+	const rights = platform === "linux"
+		? expandLinuxRootRights(requestedRights)
+		: requestedRights;
 	const runtimeDeviceFiles = ["/dev/null", "/dev/zero", "/dev/random", "/dev/urandom"]
 		.filter(existsSync);
 	const runtimeConfigFiles = [join(homedir(), ".gitconfig")].filter(existsSync);
@@ -224,9 +260,12 @@ export function buildNonoProfile(
 		? ["/Library/Keychains/System.keychain"]
 		: [];
 	const runtimeReadFiles = [...runtimeConfigFiles, ...runtimeTrustFiles];
-	const protectionBypassPaths = request.policy.filesystem_mode === "full"
-		? ["/"]
-		: [...runtimeReadFiles, ...runtimeConfigDirectories];
+	const protectionBypassPaths = [...new Set([
+		...rights.map((right) => right.path),
+		...runtimeDeviceFiles,
+		...runtimeReadFiles,
+		...runtimeConfigDirectories,
+	])].sort();
 	const seatbeltDenies = request.policy.denies;
 	const filesystem = {
 		allow: rightPaths(rights, "write", "tree"),
@@ -261,6 +300,9 @@ export function buildNonoProfile(
 	return {
 		$schema: "https://nono.sh/schemas/nono-profile.schema.json",
 		extends: "default",
+		...(platform === "darwin" && rights.some((right) => right.path === "/")
+			? { allow_parent_of_protected: true }
+			: {}),
 		meta: {
 			name: "pi-nono-command",
 			version: "1",
@@ -273,6 +315,48 @@ export function buildNonoProfile(
 			...(localPorts.length > 0 ? { open_port: localPorts } : {}),
 		},
 	};
+}
+
+/** Landlock cannot deny Nono state beneath `/`; snapshot its sibling root entries instead. */
+function expandLinuxRootRights(
+	rights: readonly SandboxFilesystemRight[],
+): SandboxFilesystemRight[] {
+	const rootAccess = rights
+		.filter((right) => right.path === "/" && right.scope === "tree")
+		.map((right) => right.access);
+	if (rootAccess.length === 0) return [...rights];
+
+	const expanded = rights.filter((right) => right.path !== "/" || right.scope !== "tree");
+	const protectedParent = dirname(LINUX_NONO_HOME);
+	for (const name of readdirSync("/")) {
+		const path = join("/", name);
+		if (path === protectedParent) continue;
+		let directory: boolean;
+		try {
+			directory = statSync(path).isDirectory();
+		} catch (error) {
+			if (isMissingPath(error)) continue;
+			throw error;
+		}
+		for (const access of rootAccess) {
+			expanded.push({
+				access,
+				path,
+				scope: directory ? "tree" : "file",
+				missing_path: "reject",
+			});
+		}
+	}
+	return expanded;
+}
+
+function isMissingPath(error: unknown): boolean {
+	return Boolean(
+		error &&
+			typeof error === "object" &&
+			"code" in error &&
+			["ENOENT", "ENOTDIR"].includes(String(error.code)),
+	);
 }
 
 function rightPaths(
