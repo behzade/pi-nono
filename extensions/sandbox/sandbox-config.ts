@@ -565,6 +565,18 @@ function matchesAny(name: string, patterns: readonly string[]): boolean {
 	return patterns.some((pattern) => globPattern(pattern).test(name));
 }
 
+const PROJECT_PATH_HANDOFF = "PI_GUI_CAPTURED_PROJECT_PATH";
+
+export function captureLaunchEnvironment(
+	runtime: Readonly<NodeJS.ProcessEnv> = process.env,
+): NodeJS.ProcessEnv {
+	const environment = { ...runtime };
+	const capturedPath = environment[PROJECT_PATH_HANDOFF];
+	delete environment[PROJECT_PATH_HANDOFF];
+	if (capturedPath !== undefined) environment.PATH = capturedPath;
+	return environment;
+}
+
 const PI_SESSION_ENV_NAMES = [
 	"PI_SESSION_ID",
 	"PI_SESSION_FILE",

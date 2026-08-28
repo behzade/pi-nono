@@ -23,6 +23,7 @@ import {
 import { ActiveAccessPolicy } from "./active-access-policy.ts";
 import { registerAccessRequest } from "./access-request.ts";
 import {
+	captureLaunchEnvironment,
 	DEFAULT_CONFIG,
 	filesystemAccessMode,
 	type NativeSandboxConfig,
@@ -132,7 +133,7 @@ export default function (pi: ExtensionAPI) {
 	let accessPolicy: ActiveAccessPolicy | undefined;
 	let nonoClient: NonoClient | undefined;
 	let processSessions: NativeProcessSessions | undefined;
-	let sessionEnvironment: SandboxSourceEnvironment = Object.freeze({ ...process.env });
+	let sessionEnvironment: SandboxSourceEnvironment = Object.freeze(captureLaunchEnvironment());
 	let userBashCounter = 0;
 	let sessionGeneration = 0;
 	let approvalContext: ExtensionContext | undefined;
@@ -320,7 +321,7 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		const generation = ++sessionGeneration;
-		sessionEnvironment = Object.freeze({ ...process.env });
+		sessionEnvironment = Object.freeze(captureLaunchEnvironment());
 		if (approvalContext) unregisterApprovalSession(approvalContext);
 		approvalContext = ctx;
 		registerApprovalSession(ctx);

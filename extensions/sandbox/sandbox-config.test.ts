@@ -3,6 +3,7 @@ import test from "node:test";
 import {
 	DEFAULT_CONFIG,
 	buildShellEnvironment,
+	captureLaunchEnvironment,
 	mergeGlobalConfig,
 	normalizeConfig,
 	restoreCapturedShellEnvironment,
@@ -92,6 +93,18 @@ test("shell environment preserves the active development shell and removes secre
 	assert.equal(environment.DATABASE_PASSWORD, undefined);
 	assert.equal(environment.UNRELATED, undefined);
 	assert.equal(environment.PYTHONDONTWRITEBYTECODE, "1");
+});
+
+test("GPUI project PATH handoff overrides runtime PATH without leaking", () => {
+	const environment = captureLaunchEnvironment({
+		PATH: "/runtime/tools",
+		PI_GUI_CAPTURED_PROJECT_PATH: "/captured/cargo:/captured/git",
+		RUNTIME_VALUE: "kept",
+	});
+
+	assert.equal(environment.PATH, "/captured/cargo:/captured/git");
+	assert.equal(environment.PI_GUI_CAPTURED_PROJECT_PATH, undefined);
+	assert.equal(environment.RUNTIME_VALUE, "kept");
 });
 
 test("disabled sandbox restores captured PATH with current session metadata", () => {
