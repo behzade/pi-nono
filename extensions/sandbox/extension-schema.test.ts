@@ -3,6 +3,7 @@ import { delimiter, dirname } from "node:path";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import registerSandbox from "./index.ts";
+import { SANDBOX_MODE_STATUS_KEY } from "./sandbox-mode.ts";
 import { hostBash } from "./sandbox-policy.ts";
 
 interface RegisteredTool {
@@ -44,12 +45,16 @@ test("disabled sandbox does not intercept built-in file tools", async () => {
 	);
 });
 
-test("full mode bypasses host wrappers that replace captured PATH", async () => {
+test("full mode preserves captured PATH and acknowledges live mode requests", async () => {
 	const originalPath = process.env.PATH;
 	const originalHandoff = process.env.PI_GUI_CAPTURED_PROJECT_PATH;
 	const capturedPath = `${dirname(hostBash({ PATH: originalPath }))}${delimiter}/captured/project`;
 	let sessionStart: ((event: unknown, context: unknown) => Promise<unknown>) | undefined;
 	let bashTool: RegisteredTool | undefined;
+	let sandboxMode: {
+		handler(args: string, context: unknown): Promise<void>;
+	} | undefined;
+	const statuses = new Map<string, string | undefined>();
 	try {
 		process.env.PATH = capturedPath;
 		process.env.PI_GUI_CAPTURED_PROJECT_PATH = capturedPath;
@@ -62,7 +67,9 @@ test("full mode bypasses host wrappers that replace captured PATH", async () => 
 			registerTool(tool: RegisteredTool) {
 				if (tool.name === "bash") bashTool = tool;
 			},
-			registerCommand() {},
+			registerCommand(name: string, command: { handler(args: string, context: unknown): Promise<void> }) {
+				if (name === "sandbox-mode") sandboxMode = command;
+			},
 			on(event: string, handler: (event: unknown, context: unknown) => Promise<unknown>) {
 				if (event === "session_start") sessionStart = handler;
 			},
@@ -73,17 +80,20 @@ test("full mode bypasses host wrappers that replace captured PATH", async () => 
 		const context = {
 			cwd: process.cwd(),
 			model: { provider: "test-provider", id: "test-model" },
+			mode: "rpc",
+			isIdle: () => true,
+			isProjectTrusted: () => false,
 			sessionManager: {
 				getSessionFile: () => undefined,
 				getSessionId: () => "current-session",
 			},
 			ui: {
 				notify() {},
-				setStatus() {},
+				setStatus(key: string, value: string | undefined) { statuses.set(key, value); },
 				theme: { fg(_color: string, value: string) { return value; } },
 			},
 		};
-		assert(sessionStart && bashTool);
+		assert(sessionStart && bashTool && sandboxMode);
 		await sessionStart({ reason: "startup" }, context);
 		const result = await bashTool.execute(
 			"test-bash",
@@ -98,6 +108,39 @@ test("full mode bypasses host wrappers that replace captured PATH", async () => 
 		assert.equal(
 			result.content[0]?.text,
 			`${capturedPath}|unset|current-session`,
+		);
+
+		await sandboxMode.handler(JSON.stringify({
+			requestId: "gpui-permission-1",
+			files: "full",
+			network: "full",
+		}), context);
+		assert.deepEqual(
+			JSON.parse(statuses.get(SANDBOX_MODE_STATUS_KEY) ?? "null"),
+			{
+				version: 1,
+				requestId: "gpui-permission-1",
+				files: "full",
+				network: "full",
+				success: true,
+			},
+		);
+
+		await sandboxMode.handler(JSON.stringify({
+			requestId: "gpui-permission-2",
+			files: "sandboxed",
+			network: "sandboxed",
+		}), { ...context, isIdle: () => false });
+		assert.deepEqual(
+			JSON.parse(statuses.get(SANDBOX_MODE_STATUS_KEY) ?? "null"),
+			{
+				version: 1,
+				requestId: "gpui-permission-2",
+				files: "sandboxed",
+				network: "sandboxed",
+				success: false,
+				error: "Wait for Pi to become idle before changing sandbox access",
+			},
 		);
 	} finally {
 		if (originalPath === undefined) delete process.env.PATH;

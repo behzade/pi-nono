@@ -9,18 +9,17 @@ import type {
 	ExtensionContext,
 	ToolCallEvent,
 } from "@earendil-works/pi-coding-agent";
+import { Effect, ManagedRuntime } from "effect";
 import {
 	type BashOperations,
 	createBashTool,
 	getAgentDir,
 } from "@earendil-works/pi-coding-agent";
-import { NonoClient } from "./nono-client.ts";
 import {
 	formatProcessSnapshot,
 	notifyProcessSettlement,
 	processSessionDetails,
 } from "./process-sessions.ts";
-import { ActiveAccessPolicy } from "./active-access-policy.ts";
 import { registerAccessRequest } from "./access-request.ts";
 import {
 	captureLaunchEnvironment,
@@ -55,12 +54,23 @@ import {
 	hostBash,
 	type SandboxSourceEnvironment,
 } from "./sandbox-policy.ts";
+import {
+	decodeSandboxModeRequest,
+	SANDBOX_MODE_STATUS_KEY,
+	sandboxModeError,
+	sandboxModeResult,
+} from "./sandbox-mode.ts";
+import {
+	SandboxRuntime,
+	sandboxRuntimeLayer,
+	type CapturedAccessPolicy,
+	type SandboxRuntimeStatus,
+} from "./sandbox-runtime.ts";
 import { runtimeNetworkHosts } from "./network-policy.ts";
 import {
 	registerApprovalSession,
 	unregisterApprovalSession,
 } from "./approval-transport.ts";
-import { NativeProcessSessions } from "./native-process-sessions.ts";
 import {
 	BashParams,
 	ProcessParams,
@@ -71,11 +81,6 @@ import {
 	type ProjectAccessRight,
 } from "./project-policy.ts";
 import { sessionPolicyPath } from "./session-policy-store.ts";
-import {
-	resolvePackagedExecutables,
-	resolveSystemBubblewrap,
-} from "./packaged-executables.ts";
-import { FIXED_NONO_PATH } from "./fixed-executables.ts";
 
 function readGlobalConfig(): NativeSandboxConfig {
 	const path = resolve(homedir(), ".config", "pi-nono", "sandbox.json");
@@ -103,17 +108,6 @@ function createCapturedLocalBash(
 	});
 }
 
-type SandboxState =
-	| { kind: "disabled"; reason: string }
-	| { kind: "initializing" }
-	| {
-			kind: "ready";
-			config: NativeSandboxConfig;
-			machineConfig: NativeSandboxConfig;
-			environment: SandboxSourceEnvironment;
-	  }
-	| { kind: "failed"; reason: string };
-
 export default function (pi: ExtensionAPI) {
 	pi.registerFlag("no-sandbox", {
 		description: "Disable OS-level sandboxing for bash commands",
@@ -133,31 +127,30 @@ export default function (pi: ExtensionAPI) {
 
 	const localCwd = process.cwd();
 	const localBash = createBashTool(localCwd);
-	let sandboxState: SandboxState = { kind: "initializing" };
-	let accessPolicy: ActiveAccessPolicy | undefined;
-	let nonoClient: NonoClient | undefined;
-	let processSessions: NativeProcessSessions | undefined;
-	let sessionEnvironment: SandboxSourceEnvironment = Object.freeze(captureLaunchEnvironment());
+	const sandbox = ManagedRuntime.make(sandboxRuntimeLayer({
+		onProcessSettled: (settlement) => notifyProcessSettlement(pi, settlement),
+	}));
 	let userBashCounter = 0;
-	let sessionGeneration = 0;
 	let approvalContext: ExtensionContext | undefined;
 
-	const activeAccess = (): ActiveAccessPolicy => {
-		if (sandboxState.kind !== "ready" || !accessPolicy) throw new Error("Sandbox is not ready");
-		return accessPolicy;
-	};
-	const setEffectiveConfig = (config: NativeSandboxConfig): void => {
-		sandboxState = { ...requireReadyState(sandboxState), config };
-	};
-	const synchronizeAccess = (): ActiveProjectPolicy => {
-		const effective = activeAccess().synchronize();
-		setEffectiveConfig(effective.config);
-		return effective;
-	};
-	const networkHosts = (policy: ActiveProjectPolicy = activeAccess().effective) =>
+	const activeAccess = () => sandbox.runSync(
+		SandboxRuntime.use((runtime) => runtime.activeAccess),
+	);
+	const runtimeStatus = (): SandboxRuntimeStatus => sandbox.runSync(
+		SandboxRuntime.use((runtime) => runtime.status),
+	);
+	const networkHosts = (policy: ActiveProjectPolicy) =>
 		runtimeNetworkHosts(policy.config, policy.networkHosts);
+	const updateSandboxStatus = (ctx: ExtensionContext, config: NativeSandboxConfig): void => {
+		if (filesystemAccessMode(config) === "full" && networkAccessMode(config) === "full") {
+			ctx.ui.setStatus("sandbox", ctx.ui.theme.fg("warning", "Sandbox off · full access"));
+			return;
+		}
+		const backendLabel = `nono ${process.platform === "linux" ? "Landlock" : "Seatbelt"}`;
+		ctx.ui.setStatus("sandbox", ctx.ui.theme.fg("accent", `🔒 ${backendLabel}`));
+	};
 
-	registerAccessRequest(pi, activeAccess, setEffectiveConfig);
+	registerAccessRequest(pi, activeAccess);
 
 	pi.registerTool({
 		name: "process",
@@ -169,8 +162,10 @@ export default function (pi: ExtensionAPI) {
 		parameters: ProcessParams,
 		executionMode: "sequential",
 		async execute(_toolCallId, params, signal) {
-			if (sandboxState.kind !== "ready" || !processSessions) return toolError("The native sandbox is not ready.");
 			try {
+				const processSessions = await sandbox.runPromise(
+					SandboxRuntime.use((runtime) => runtime.processSessions),
+				);
 				const snapshot = await processSessions.continue(params.id, {
 					...(params.input === undefined ? {} : { input: params.input }),
 					...(params.close_stdin === undefined ? {} : { closeStdin: params.close_stdin }),
@@ -198,43 +193,46 @@ export default function (pi: ExtensionAPI) {
 		executionMode: "sequential",
 		renderShell: "self",
 		async execute(id, params, signal, onUpdate, ctx) {
+			const commandPolicy = await sandbox.runPromise(
+				SandboxRuntime.use((runtime) => runtime.captureCommand),
+			);
 			if (params.yield_ms !== undefined) {
-				if (sandboxState.kind === "disabled") throw new Error("Process yielding is unavailable while the sandbox is disabled");
-				if (sandboxState.kind !== "ready") throw new Error(sandboxState.kind === "failed" ? sandboxState.reason : "Sandbox is still initializing; command blocked");
-				if (!processSessions) throw new Error("Process sessions are not ready");
-				const policyAtStart = synchronizeAccess();
-				const sessionId = await processSessions.start({
+				if (commandPolicy.kind === "local") {
+					throw new Error("Process yielding is unavailable while the sandbox is disabled");
+				}
+				const sessionId = await commandPolicy.processSessions.start({
 					command: params.command,
 					cwd: ctx?.cwd ?? localCwd,
 					...(params.timeout === undefined ? {} : { timeout: params.timeout }),
-					config: policyAtStart.config,
-					permissions: policyAtStart.filesystem,
-					revalidatePermissions: () => activeAccess().revalidate(policyAtStart).filesystem,
-					networkHosts: networkHosts(policyAtStart),
-					localPorts: policyAtStart.localPorts,
+					config: commandPolicy.policy.config,
+					permissions: commandPolicy.policy.filesystem,
+					revalidatePermissions: commandPolicy.revalidatePermissions,
+					networkHosts: networkHosts(commandPolicy.policy),
+					localPorts: commandPolicy.policy.localPorts,
 				}, signal);
-				const snapshot = await processSessions.yield(sessionId, params.yield_ms, signal);
+				const snapshot = await commandPolicy.processSessions.yield(
+					sessionId,
+					params.yield_ms,
+					signal,
+				);
 				const output = formatProcessSnapshot(snapshot);
 				if (snapshot.state === "failed" || snapshot.state === "exited") throw new Error(output);
 				return { content: [{ type: "text", text: output }], details: processSessionDetails(snapshot) };
 			}
-			if (sandboxState.kind === "disabled") {
-				return createCapturedLocalBash(localCwd, sessionEnvironment)
+			if (commandPolicy.kind === "local") {
+				return createCapturedLocalBash(localCwd, commandPolicy.environment)
 					.execute(id, params, signal, onUpdate, ctx);
 			}
-			if (sandboxState.kind !== "ready") throw new Error(sandboxState.kind === "failed" ? sandboxState.reason : "Sandbox is still initializing; command blocked");
-			if (!nonoClient) throw new Error("Nono sandbox is not ready");
-			const policyAtStart = synchronizeAccess();
 			const operations = createNativeSandboxOps(
-				nonoClient,
-				policyAtStart.config,
-				policyAtStart.filesystem,
-				networkHosts(policyAtStart),
-				policyAtStart.localPorts,
+				commandPolicy.client,
+				commandPolicy.policy.config,
+				commandPolicy.policy.filesystem,
+				networkHosts(commandPolicy.policy),
+				commandPolicy.policy.localPorts,
 				id,
 				{
-					sourceEnvironment: requireReadyState(sandboxState).environment,
-					revalidatePermissions: () => activeAccess().revalidate(policyAtStart).filesystem,
+					sourceEnvironment: commandPolicy.environment,
+					revalidatePermissions: commandPolicy.revalidatePermissions,
 				},
 			);
 			return createBashTool(localCwd, { operations }).execute(id, params, signal, onUpdate);
@@ -242,12 +240,18 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("tool_call", async (event, ctx) => {
-		if (sandboxState.kind === "disabled") return;
+		const status = runtimeStatus();
+		if (status.kind === "disabled") return;
 		if (!["read", "write", "edit", "grep", "find", "ls"].includes(event.toolName)) return;
-		if (
-			sandboxState.kind === "ready" &&
-			filesystemAccessMode(activeConfig(sandboxState)) === "full"
-		) return;
+		if (status.kind === "ready" && filesystemAccessMode(status.config) === "full") return;
+		if (status.kind !== "ready") {
+			return {
+				block: true,
+				reason: status.kind === "failed"
+					? status.reason
+					: "Sandbox access is not ready; file operation blocked",
+			};
+		}
 		if (event.toolName === "grep" || event.toolName === "find") {
 			return {
 				block: true,
@@ -258,8 +262,15 @@ export default function (pi: ExtensionAPI) {
 		if (!lexicalPath) return { block: true, reason: "File path is missing" };
 		const path = canonicalize(lexicalPath);
 		const access = event.toolName === "write" || event.toolName === "edit" ? "write" : "read";
-		const synchronizedPolicy = synchronizeAccess();
-		const config = activeConfig(sandboxState);
+		let captured: CapturedAccessPolicy;
+		try {
+			captured = await sandbox.runPromise(
+				SandboxRuntime.use((runtime) => runtime.captureAccess),
+			);
+		} catch (error) {
+			return { block: true, reason: errorMessage(error) };
+		}
+		const config = captured.policy.config;
 		if (filesystemAccessMode(config) === "read-only" && access === "write") {
 			return {
 				block: true,
@@ -280,7 +291,7 @@ export default function (pi: ExtensionAPI) {
 			return { block: true, reason: `Writes to a symlinked control folder cannot be granted: ${gitRoot}` };
 		}
 		const controlRoot = gitRoot;
-		const fileRights = activeAccess().revalidate(synchronizedPolicy).filesystem;
+		const fileRights = captured.revalidatePermissions();
 		const allowed = controlRoot
 			? fileRights.some((permission) =>
 				permission.kind === access && permission.directory && lexicalControlKey(permission.path) === lexicalControlKey(controlRoot))
@@ -297,40 +308,39 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("user_bash", () => {
-		if (sandboxState.kind === "disabled") return;
-		if (sandboxState.kind === "ready") {
-			if (!nonoClient) return { operations: unavailableBashOps("Nono sandbox is not ready") };
-			try {
-				const policyAtStart = synchronizeAccess();
-				return {
-					operations: createNativeSandboxOps(
-						nonoClient,
-						policyAtStart.config,
-						policyAtStart.filesystem,
-						networkHosts(policyAtStart),
-						policyAtStart.localPorts,
-						`user-bash-${++userBashCounter}-${randomUUID()}`,
-						{
-							sourceEnvironment: requireReadyState(sandboxState).environment,
-							revalidatePermissions: () => activeAccess().revalidate(policyAtStart).filesystem,
-						},
-					),
-				};
-			} catch (error) {
-				return { operations: unavailableBashOps(errorMessage(error)) };
-			}
+		try {
+			const commandPolicy = sandbox.runSync(
+				SandboxRuntime.use((runtime) => runtime.captureCommand),
+			);
+			if (commandPolicy.kind === "local") return;
+			return {
+				operations: createNativeSandboxOps(
+					commandPolicy.client,
+					commandPolicy.policy.config,
+					commandPolicy.policy.filesystem,
+					networkHosts(commandPolicy.policy),
+					commandPolicy.policy.localPorts,
+					`user-bash-${++userBashCounter}-${randomUUID()}`,
+					{
+						sourceEnvironment: commandPolicy.environment,
+						revalidatePermissions: commandPolicy.revalidatePermissions,
+					},
+				),
+			};
+		} catch (error) {
+			return { operations: unavailableBashOps(errorMessage(error)) };
 		}
-		return { operations: unavailableBashOps(sandboxState.kind === "failed" ? sandboxState.reason : "Sandbox is still initializing; command blocked") };
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
-		const generation = ++sessionGeneration;
-		sessionEnvironment = Object.freeze(captureLaunchEnvironment());
+		const environment = Object.freeze(captureLaunchEnvironment());
 		if (approvalContext) unregisterApprovalSession(approvalContext);
 		approvalContext = ctx;
 		registerApprovalSession(ctx);
 		if (pi.getFlag("no-sandbox") as boolean) {
-			sandboxState = { kind: "disabled", reason: "disabled via --no-sandbox" };
+			await sandbox.runPromise(SandboxRuntime.use((runtime) =>
+				runtime.disable("disabled via --no-sandbox", environment),
+			));
 			ctx.ui.notify("Sandbox disabled via --no-sandbox", "warning");
 			return;
 		}
@@ -341,116 +351,123 @@ export default function (pi: ExtensionAPI) {
 				parseNetworkAccessMode(pi.getFlag("sandbox-network"), "--sandbox-network"),
 			);
 			if (!machineConfig.enabled) {
-				sandboxState = { kind: "disabled", reason: "disabled via global config" };
+				await sandbox.runPromise(SandboxRuntime.use((runtime) =>
+					runtime.disable("disabled via global config", environment),
+				));
 				ctx.ui.notify("Sandbox disabled via global config", "warning");
 				return;
 			}
-			if (
-				filesystemAccessMode(machineConfig) === "full" &&
-				networkAccessMode(machineConfig) === "full"
-			) {
-				sandboxState = { kind: "disabled", reason: "full file and network access selected" };
-				ctx.ui.setStatus("sandbox", ctx.ui.theme.fg("warning", "Sandbox off · full access"));
-				return;
-			}
 			const sessionFile = ctx.sessionManager.getSessionFile();
-			accessPolicy = ActiveAccessPolicy.load(
-				ctx.cwd,
-				machineConfig,
-				ctx.isProjectTrusted(),
-				sessionFile
-					? { sessionId: ctx.sessionManager.getSessionId(), sessionFile, cwd: ctx.cwd }
-					: undefined,
-			);
-			sandboxState = { kind: "initializing" };
-			if (process.platform !== "darwin" && process.platform !== "linux") throw new Error("the native sandbox supports macOS and Linux only");
-			const packagedExecutables = fixedPackagedExecutables();
-			const nonoPath = packagedExecutables.nonoPath;
-			const client = await NonoClient.start(nonoPath, packagedExecutables.bwrapPath);
-			if (generation !== sessionGeneration) { await client.shutdown(); return; }
-			nonoClient = client;
-			processSessions = new NativeProcessSessions(
-				client,
-				sessionEnvironment,
-				(settlement) => {
-					if (generation === sessionGeneration) notifyProcessSettlement(pi, settlement);
-				},
-			);
-			sandboxState = {
-				kind: "ready",
-				config: accessPolicy.effective.config,
-				machineConfig,
-				environment: sessionEnvironment,
-			};
-			const backendLabel = `nono ${process.platform === "linux" ? "Landlock" : "Seatbelt"}`;
-			ctx.ui.setStatus("sandbox", ctx.ui.theme.fg("accent", `🔒 ${backendLabel}`));
+			const config = await sandbox.runPromise(SandboxRuntime.use((runtime) =>
+				runtime.initialize({
+					cwd: ctx.cwd,
+					machineConfig,
+					trusted: ctx.isProjectTrusted(),
+					...(sessionFile
+						? { sessionIdentity: {
+							sessionId: ctx.sessionManager.getSessionId(),
+							sessionFile,
+							cwd: ctx.cwd,
+						} }
+						: {}),
+					environment,
+				}),
+			));
+			updateSandboxStatus(ctx, config);
 		} catch (error) {
-			if (generation !== sessionGeneration) return;
 			const reason = `Sandbox unavailable; commands are blocked: ${errorMessage(error)}`;
-			sandboxState = { kind: "failed", reason };
+			await sandbox.runPromise(SandboxRuntime.use((runtime) => runtime.fail(reason)));
 			ctx.ui.notify(reason, "error");
 		}
 	});
 
 	pi.on("session_shutdown", async () => {
-		sessionGeneration += 1;
 		if (approvalContext) unregisterApprovalSession(approvalContext);
 		approvalContext = undefined;
-		const client = nonoClient;
-		nonoClient = undefined;
-		const sessions = processSessions;
-		processSessions = undefined;
-		if (sessions) await sessions.shutdown();
-		if (client) await client.shutdown();
-		accessPolicy = undefined;
+		await sandbox.dispose();
 		userBashCounter = 0;
-		sandboxState = { kind: "initializing" };
+	});
+
+	pi.registerCommand("sandbox-mode", {
+		description: "Change OS sandbox access for subsequent commands",
+		handler: async (args, ctx) => {
+			const program = decodeSandboxModeRequest(args).pipe(
+				Effect.flatMap((request) => {
+					const change = ctx.isIdle()
+						? SandboxRuntime.use((runtime) => runtime.changeMode(request)).pipe(
+							Effect.tap((config) => Effect.sync(() => updateSandboxStatus(ctx, config))),
+						)
+						: Effect.fail(sandboxModeError(
+							"Wait for Pi to become idle before changing sandbox access",
+						));
+					return change.pipe(
+						Effect.as(sandboxModeResult(request)),
+						Effect.catch((error) => Effect.succeed(
+							sandboxModeResult(request, error.message),
+						)),
+					);
+				}),
+				Effect.flatMap((result) => Effect.sync(() => {
+					if (ctx.mode === "rpc") {
+						ctx.ui.setStatus(SANDBOX_MODE_STATUS_KEY, JSON.stringify(result));
+					} else {
+						ctx.ui.notify(
+							result.error ?? `Sandbox access changed to files=${result.files}, network=${result.network}`,
+							result.success ? "info" : "error",
+						);
+					}
+				})),
+				Effect.catch((error) => Effect.sync(() => {
+					ctx.ui.notify(error.message, "error");
+				})),
+			);
+			await sandbox.runPromise(program);
+		},
 	});
 
 	pi.registerCommand("sandbox", {
 		description: "Show OS sandbox rights",
 		handler: async (_args, ctx) => {
-			if (sandboxState.kind !== "ready") {
-				ctx.ui.notify(sandboxState.kind === "disabled" ? `Sandbox is ${sandboxState.reason}` : sandboxState.kind === "failed" ? sandboxState.reason : "Sandbox is initializing", sandboxState.kind === "failed" ? "error" : "info");
+			const status = runtimeStatus();
+			if (status.kind !== "ready") {
+				ctx.ui.notify(
+					status.kind === "disabled"
+						? `Sandbox is ${status.reason}`
+						: status.kind === "failed"
+							? status.reason
+							: "Sandbox is initializing",
+					status.kind === "failed" ? "error" : "info",
+				);
 				return;
 			}
+			let captured: CapturedAccessPolicy;
 			try {
-				synchronizeAccess();
+				captured = await sandbox.runPromise(
+					SandboxRuntime.use((runtime) => runtime.captureAccess),
+				);
 			} catch (error) {
 				ctx.ui.notify(`Sandbox policy could not be synchronized: ${errorMessage(error)}`, "error");
 				return;
 			}
-			const access = activeAccess();
-			const networkMode = networkAccessMode(access.effective.config);
+			const { access, policy } = captured;
+			const networkMode = networkAccessMode(policy.config);
 			ctx.ui.notify([
 				"OS sandbox (nono):",
-				`  Files: ${filesystemAccessMode(access.effective.config)}`,
+				`  Files: ${filesystemAccessMode(policy.config)}`,
 				`  Network: ${networkMode}`,
 				`  Project policy: ${projectPolicyPath(ctx.cwd)}`,
 				`  Project rights: ${access.project.policy.rights.map(rightLabel).join(", ") || "(none)"}`,
 				`  Session rights: ${access.session.policy.rights.map(rightLabel).join(", ") || "(none)"}`,
 				`  Session policy: ${access.sessionIdentity ? sessionPolicyPath(access.sessionIdentity) : "ephemeral"}`,
-				`  Network hosts: ${networkMode === "full" ? "(unrestricted)" : networkHosts().join(", ") || "(blocked)"}`,
-				`  Loopback ports: ${networkMode === "full" ? "(unrestricted)" : access.effective.localPorts.join(", ") || "(blocked)"}`,
-				...(access.effective.inactive.length > 0
-					? ["  Inactive grants:", ...access.effective.inactive.map((entry) => `    - ${entry}`)]
+				`  Network hosts: ${networkMode === "full" ? "(unrestricted)" : networkHosts(policy).join(", ") || "(blocked)"}`,
+				`  Loopback ports: ${networkMode === "full" ? "(unrestricted)" : policy.localPorts.join(", ") || "(blocked)"}`,
+				...(policy.inactive.length > 0
+					? ["  Inactive grants:", ...policy.inactive.map((entry) => `    - ${entry}`)]
 					: []),
 				"  Denials: bounded diagnostics; no automatic retry",
 			].join("\n"), "info");
 		},
 	});
-}
-
-function fixedPackagedExecutables(): { nonoPath: string; bwrapPath: string } {
-	if (FIXED_NONO_PATH !== null) {
-		return { nonoPath: FIXED_NONO_PATH, bwrapPath: resolveSystemBubblewrap() };
-	}
-	return resolvePackagedExecutables();
-}
-
-function requireReadyState(state: SandboxState): Extract<SandboxState, { kind: "ready" }> {
-	if (state.kind !== "ready") throw new Error("Sandbox is not ready");
-	return state;
 }
 
 function toolError(message: string) {
@@ -459,10 +476,6 @@ function toolError(message: string) {
 
 function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
-}
-
-function activeConfig(state: SandboxState): NativeSandboxConfig {
-	return state.kind === "ready" ? state.config : DEFAULT_CONFIG;
 }
 
 function lexicalControlKey(path: string): string {

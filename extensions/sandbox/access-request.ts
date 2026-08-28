@@ -22,13 +22,11 @@ import {
 	saveSessionPolicy,
 	sessionPolicyPath,
 } from "./session-policy-store.ts";
-import type { NativeSandboxConfig } from "./sandbox-config.ts";
 import { RequestAccessParams } from "./tool-schemas.ts";
 
 export function registerAccessRequest(
 	pi: ExtensionAPI,
 	getAccess: () => ActiveAccessPolicy,
-	setEffectiveConfig: (config: NativeSandboxConfig) => void,
 ): void {
 	pi.registerTool({
 		name: "request_access",
@@ -51,7 +49,6 @@ export function registerAccessRequest(
 			}
 			try {
 				access.synchronize();
-				setEffectiveConfig(access.effective.config);
 			} catch (error) {
 				return accessError(errorMessage(error), "invalid-policy");
 			}
@@ -176,7 +173,6 @@ export function registerAccessRequest(
 					}
 					access.replace(freshProject, sessionCandidate);
 				}
-				setEffectiveConfig(access.effective.config);
 			} catch (error) {
 				return accessError(`Sandbox access was not activated: ${errorMessage(error)}`, "save-failed");
 			}
