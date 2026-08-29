@@ -53,7 +53,7 @@ interface ProcessCompletionMessenger {
 			display: false;
 			details: Omit<ProcessSessionSnapshot, "output">;
 		},
-		options: { triggerTurn: true; deliverAs: "steer" },
+		options: { triggerTurn: true; deliverAs: "followUp" },
 	): void;
 }
 
@@ -70,5 +70,5 @@ export function notifyProcessSettlement(
 		content: processCompletionReprompt(settlement),
 		display: false,
 		details: processSessionDetails(settlement),
-	}, { triggerTurn: true, deliverAs: "steer" });
+	}, { triggerTurn: true, deliverAs: "followUp" });
 }
