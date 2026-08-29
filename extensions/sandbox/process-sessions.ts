@@ -50,11 +50,15 @@ interface ProcessCompletionMessenger {
 		message: {
 			customType: string;
 			content: string;
-			display: boolean;
+			display: false;
 			details: Omit<ProcessSessionSnapshot, "output">;
 		},
 		options: { triggerTurn: true; deliverAs: "steer" },
 	): void;
+}
+
+function processCompletionReprompt(settlement: ProcessSessionSnapshot): string {
+	return `${formatProcessSnapshot(settlement)}\n\nContinue the interrupted task now. Use the process result above, take any appropriate next actions, and provide a user-visible response before ending your turn.`;
 }
 
 export function notifyProcessSettlement(
@@ -63,8 +67,8 @@ export function notifyProcessSettlement(
 ): void {
 	messenger.sendMessage({
 		customType: "process-session-result",
-		content: formatProcessSnapshot(settlement),
-		display: true,
+		content: processCompletionReprompt(settlement),
+		display: false,
 		details: processSessionDetails(settlement),
 	}, { triggerTurn: true, deliverAs: "steer" });
 }

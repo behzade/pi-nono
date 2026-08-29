@@ -17,6 +17,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
 	formatProcessSnapshot,
+	modelVisibleProcessOutput,
 	notifyProcessSettlement,
 	processSessionDetails,
 } from "./process-sessions.ts";
@@ -95,6 +96,8 @@ function unavailableBashOps(reason: string): BashOperations {
 	return { async exec() { throw new Error(reason); } };
 }
 
+const AUTO_DETACH_MS = 5_000;
+
 function createCapturedLocalBash(
 	cwd: string,
 	environment: SandboxSourceEnvironment,
@@ -156,12 +159,12 @@ export default function (pi: ExtensionAPI) {
 		name: "process",
 		label: "Process session",
 		description:
-			"Continue a sandboxed process session returned by bash. With no mutation, wait for new output or completion; omit yield_ms to wait without a deadline. Optionally write stdin, close stdin, or signal the process group before waiting. Existing sessions keep the immutable policy captured by bash.",
+			"Inspect or interact with a sandboxed process session returned by bash. Optionally write stdin, close stdin, or signal the process group. Returns immediately; completion wakes the agent automatically. Existing sessions keep the immutable policy captured by bash.",
 		promptSnippet:
-			"Continue a yielded bash process by waiting, writing or closing stdin, or sending INT, TERM, or KILL. Completion wakes the agent automatically; do not poll.",
+			"Inspect or interact with a detached bash process. Never poll or wait; completion wakes the agent automatically.",
 		parameters: ProcessParams,
 		executionMode: "sequential",
-		async execute(_toolCallId, params, signal) {
+		async execute(_toolCallId, params) {
 			try {
 				const processSessions = await sandbox.runPromise(
 					SandboxRuntime.use((runtime) => runtime.processSessions),
@@ -170,8 +173,7 @@ export default function (pi: ExtensionAPI) {
 					...(params.input === undefined ? {} : { input: params.input }),
 					...(params.close_stdin === undefined ? {} : { closeStdin: params.close_stdin }),
 					...(params.signal === undefined ? {} : { signal: params.signal }),
-					...(params.yield_ms === undefined ? {} : { yieldMs: params.yield_ms }),
-				}, signal);
+				});
 				return {
 					content: [{ type: "text", text: formatProcessSnapshot(snapshot) }],
 					details: processSessionDetails(snapshot),
@@ -186,9 +188,9 @@ export default function (pi: ExtensionAPI) {
 		...localBash,
 		label: "bash (OS sandbox)",
 		description:
-			"Execute one bash command with the active project and Pi-session sandbox policy. Set yield_ms to return a generated process session if the command remains active. The call cannot declare rights and is never automatically retried. Use request_access separately after a denial.",
+			"Execute one bash command with the active project and Pi-session sandbox policy. Sandboxed commands still running after five seconds detach automatically and wake the agent on completion. The call cannot declare rights and is never automatically retried. Use request_access separately after a denial.",
 		promptSnippet:
-			"Run once under the active policy; optionally yield a long-running command into a process session. On denial, request the smallest right and explicitly rerun later.",
+			"Run once under the active policy. Long sandboxed commands detach automatically and wake you on completion; never poll. On denial, request the smallest right and explicitly rerun later.",
 		parameters: BashParams,
 		executionMode: "sequential",
 		renderShell: "self",
@@ -196,46 +198,36 @@ export default function (pi: ExtensionAPI) {
 			const commandPolicy = await sandbox.runPromise(
 				SandboxRuntime.use((runtime) => runtime.captureCommand),
 			);
-			if (params.yield_ms !== undefined) {
-				if (commandPolicy.kind === "local") {
-					throw new Error("Process yielding is unavailable while the sandbox is disabled");
-				}
-				const sessionId = await commandPolicy.processSessions.start({
-					command: params.command,
-					cwd: ctx?.cwd ?? localCwd,
-					...(params.timeout === undefined ? {} : { timeout: params.timeout }),
-					config: commandPolicy.policy.config,
-					permissions: commandPolicy.policy.filesystem,
-					revalidatePermissions: commandPolicy.revalidatePermissions,
-					networkHosts: networkHosts(commandPolicy.policy),
-					localPorts: commandPolicy.policy.localPorts,
-				}, signal);
-				const snapshot = await commandPolicy.processSessions.yield(
-					sessionId,
-					params.yield_ms,
-					signal,
-				);
-				const output = formatProcessSnapshot(snapshot);
-				if (snapshot.state === "failed" || snapshot.state === "exited") throw new Error(output);
-				return { content: [{ type: "text", text: output }], details: processSessionDetails(snapshot) };
-			}
 			if (commandPolicy.kind === "local") {
 				return createCapturedLocalBash(localCwd, commandPolicy.environment)
 					.execute(id, params, signal, onUpdate, ctx);
 			}
-			const operations = createNativeSandboxOps(
-				commandPolicy.client,
-				commandPolicy.policy.config,
-				commandPolicy.policy.filesystem,
-				networkHosts(commandPolicy.policy),
-				commandPolicy.policy.localPorts,
-				id,
-				{
-					sourceEnvironment: commandPolicy.environment,
-					revalidatePermissions: commandPolicy.revalidatePermissions,
-				},
-			);
-			return createBashTool(localCwd, { operations }).execute(id, params, signal, onUpdate);
+			const sessionId = await commandPolicy.processSessions.start({
+				command: params.command,
+				cwd: ctx?.cwd ?? localCwd,
+				...(params.timeout === undefined ? {} : { timeout: params.timeout }),
+				config: commandPolicy.policy.config,
+				permissions: commandPolicy.policy.filesystem,
+				revalidatePermissions: commandPolicy.revalidatePermissions,
+				networkHosts: networkHosts(commandPolicy.policy),
+				localPorts: commandPolicy.policy.localPorts,
+			}, signal);
+			const snapshot = await commandPolicy.processSessions.detachAfter(sessionId, AUTO_DETACH_MS, signal);
+			if (snapshot.state === "running") {
+				return {
+					content: [{ type: "text", text: formatProcessSnapshot(snapshot) }],
+					details: processSessionDetails(snapshot),
+				};
+			}
+			const output = modelVisibleProcessOutput(snapshot.output).trimEnd() || "(no output)";
+			if (snapshot.state === "failed") {
+				throw new Error(`${output}\n\nCommand failed: ${snapshot.error ?? "unknown error"}`);
+			}
+			if (snapshot.state === "exited") {
+				throw new Error(`${output}\n\nCommand exited with code ${snapshot.exitCode ?? 1}`);
+			}
+			if (snapshot.state === "stopped") throw new Error(`${output}\n\nCommand aborted`);
+			return { content: [{ type: "text", text: output }], details: undefined };
 		},
 	});
 

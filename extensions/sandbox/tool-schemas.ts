@@ -38,12 +38,6 @@ export const RequestAccessParams = Type.Object(
 	{ additionalProperties: false },
 );
 
-const YieldMilliseconds = Type.Integer({
-	description: "When set, how long to wait before returning a live process session",
-	minimum: 250,
-	maximum: 30_000,
-});
-
 export const BashParams = Type.Object(
 	{
 		command: Type.String({ description: "Bash command to execute" }),
@@ -52,7 +46,6 @@ export const BashParams = Type.Object(
 			exclusiveMinimum: 0,
 			maximum: 86_400,
 		})),
-		yield_ms: Type.Optional(YieldMilliseconds),
 	},
 	{ additionalProperties: false },
 );
@@ -60,14 +53,13 @@ export const BashParams = Type.Object(
 export const ProcessParams = Type.Object(
 	{
 		id: Type.String({ description: "Process session ID returned by bash", minLength: 1 }),
-		input: Type.Optional(Type.String({ description: "Bytes to write to stdin before waiting" })),
+		input: Type.Optional(Type.String({ description: "Bytes to write to stdin before returning" })),
 		close_stdin: Type.Optional(Type.Boolean({ description: "Close stdin after writing input, if any" })),
 		signal: Type.Optional(Type.Union([
 			Type.Literal("INT"),
 			Type.Literal("TERM"),
 			Type.Literal("KILL"),
-		], { description: "Signal the process group before waiting" })),
-		yield_ms: Type.Optional(YieldMilliseconds),
+		], { description: "Signal the process group before returning" })),
 	},
 	{ additionalProperties: false },
 );

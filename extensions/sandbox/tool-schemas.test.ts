@@ -6,20 +6,15 @@ import { BashParams, ProcessParams } from "./tool-schemas.ts";
 const accessRequestSource = readFileSync(new URL("./access-request.ts", import.meta.url), "utf8");
 const schemaSource = readFileSync(new URL("./tool-schemas.ts", import.meta.url), "utf8");
 
-test("bash exposes optional bounded yielding", () => {
-	const schema = BashParams as {
-		type?: unknown;
-		properties?: { yield_ms?: { type?: unknown; minimum?: unknown; maximum?: unknown } };
-	};
+test("bash does not expose automatic detachment timing", () => {
+	const schema = BashParams as { type?: unknown; properties?: Record<string, unknown> };
 	assert.equal(schema.type, "object");
-	assert.equal(schema.properties?.yield_ms?.type, "integer");
-	assert.equal(schema.properties?.yield_ms?.minimum, 250);
-	assert.equal(schema.properties?.yield_ms?.maximum, 30_000);
+	assert.deepEqual(Object.keys(schema.properties ?? {}), ["command", "timeout"]);
 });
 
-test("process exposes only continuation primitives", () => {
+test("process exposes only immediate control primitives", () => {
 	const schema = ProcessParams as { properties?: Record<string, unknown>; required?: string[] };
-	assert.deepEqual(Object.keys(schema.properties ?? {}), ["id", "input", "close_stdin", "signal", "yield_ms"]);
+	assert.deepEqual(Object.keys(schema.properties ?? {}), ["id", "input", "close_stdin", "signal"]);
 	assert.deepEqual(schema.required, ["id"]);
 });
 

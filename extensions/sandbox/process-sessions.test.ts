@@ -23,8 +23,8 @@ test("process completion wakes the agent without polling", () => {
 
 	assert.deepEqual(sent, [[{
 		customType: "process-session-result",
-		content: "failed\n\nProcess pi-check exited with exit code 1.",
-		display: true,
+		content: "failed\n\nProcess pi-check exited with exit code 1.\n\nContinue the interrupted task now. Use the process result above, take any appropriate next actions, and provide a user-visible response before ending your turn.",
+		display: false,
 		details: { id: "pi-check", state: "exited", exitCode: 1 },
 	}, { triggerTurn: true, deliverAs: "steer" }]]);
 });

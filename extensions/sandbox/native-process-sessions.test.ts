@@ -47,7 +47,7 @@ const startOptions = () => ({
 	localPorts: [],
 });
 
-test("yielded processes preserve incremental output and interaction", async () => {
+test("detached processes preserve incremental output and interaction", async () => {
 	const client = new FakeProcessClient();
 	const manager = new NativeProcessSessions(client, process.env);
 	try {
@@ -57,33 +57,32 @@ test("yielded processes preserve incremental output and interaction", async () =
 		assert.equal(client.request?.interactive, true);
 
 		client.emit("before\n");
-		assert.equal((await manager.yield(id, 1)).output, "before\n");
+		assert.equal((await manager.detachAfter(id, 1)).output, "before\n");
 		client.emit("after\n");
 		const continued = await manager.continue(id, {
 			input: "answer\n",
 			closeStdin: true,
 			signal: "INT",
-			yieldMs: 1,
 		});
 		assert.equal(continued.output, "after\n");
 		assert.deepEqual(client.writes, [Buffer.from("answer\n")]);
 		assert.equal(client.closedStdin, true);
-		await manager.continue(id, { signal: "TERM", yieldMs: 1 });
-		await manager.continue(id, { signal: "KILL", yieldMs: 1 });
+		await manager.continue(id, { signal: "TERM" });
+		await manager.continue(id, { signal: "KILL" });
 		assert.deepEqual(client.signals, ["SIGINT", "SIGTERM", "SIGKILL"]);
 	} finally {
 		await manager.shutdown();
 	}
 });
 
-test("only detached, unobserved completion sends a notification", async () => {
+test("only detached completion sends a notification", async () => {
 	const foregroundClient = new FakeProcessClient();
 	const foregroundNotifications: unknown[] = [];
 	const foreground = new NativeProcessSessions(foregroundClient, process.env, (value) => foregroundNotifications.push(value));
 	try {
 		const id = await foreground.start(startOptions());
 		foregroundClient.finish();
-		assert.equal((await foreground.yield(id, 100)).state, "completed");
+		assert.equal((await foreground.detachAfter(id, 100)).state, "completed");
 		assert.deepEqual(foregroundNotifications, []);
 	} finally {
 		await foreground.shutdown();
@@ -95,7 +94,7 @@ test("only detached, unobserved completion sends a notification", async () => {
 	const background = new NativeProcessSessions(backgroundClient, process.env, notify);
 	try {
 		const id = await background.start(startOptions());
-		await background.yield(id, 1);
+		await background.detachAfter(id, 1);
 		backgroundClient.emit("later\n");
 		backgroundClient.finish(7);
 		assert.deepEqual(await notification, { id, state: "exited", output: "later\n", exitCode: 7 });
@@ -104,37 +103,33 @@ test("only detached, unobserved completion sends a notification", async () => {
 	}
 });
 
-test("process continuation without yield_ms waits for output or completion", async () => {
+test("process control returns current state without waiting", async () => {
 	const client = new FakeProcessClient();
 	const manager = new NativeProcessSessions(client, process.env);
 	try {
 		const id = await manager.start(startOptions());
-		const waiting = manager.continue(id, {});
-		const early = await Promise.race([
-			waiting.then(() => "returned"),
-			new Promise<string>((resolve) => setTimeout(() => resolve("waiting"), 20)),
-		]);
-		assert.equal(early, "waiting");
-
+		assert.deepEqual(await manager.continue(id, {}), { id, state: "running", output: "" });
+		client.emit("still running\n");
+		assert.deepEqual(await manager.continue(id, {}), { id, state: "running", output: "still running\n" });
 		client.finish();
-		assert.deepEqual(await waiting, { id, state: "completed", output: "", exitCode: 0 });
+		assert.deepEqual(await manager.continue(id, {}), { id, state: "completed", output: "", exitCode: 0 });
 	} finally {
 		await manager.shutdown();
 	}
 });
 
-test("completion returned by process does not also notify", async () => {
+test("inspecting a detached process does not suppress its completion notification", async () => {
 	const client = new FakeProcessClient();
-	const notifications: unknown[] = [];
-	const manager = new NativeProcessSessions(client, process.env, (value) => notifications.push(value));
+	let notify!: (value: unknown) => void;
+	const notification = new Promise((resolve) => { notify = resolve; });
+	const manager = new NativeProcessSessions(client, process.env, notify);
 	try {
 		const id = await manager.start(startOptions());
-		await manager.yield(id, 1);
-		const observing = manager.continue(id, { yieldMs: 100 });
+		await manager.detachAfter(id, 1);
+		assert.deepEqual(await manager.continue(id, {}), { id, state: "running", output: "" });
 		client.emit("final\n");
 		client.finish();
-		assert.deepEqual(await observing, { id, state: "completed", output: "final\n", exitCode: 0 });
-		assert.deepEqual(notifications, []);
+		assert.deepEqual(await notification, { id, state: "completed", output: "final\n", exitCode: 0 });
 	} finally {
 		await manager.shutdown();
 	}

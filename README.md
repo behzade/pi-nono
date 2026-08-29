@@ -46,11 +46,12 @@ package and platform-specific npm tarballs.
 
 ## Long-running processes
 
-Set `yield_ms` on `bash` to return a generated process session when a command
-remains active. The `process` tool can wait for incremental output, write or
-close stdin, or send `INT`, `TERM`, or `KILL` to that process group. Sessions
-use piped stdio rather than a pseudo-terminal. Completion is delivered
-automatically, so agents do not need to poll.
+Sandboxed `bash` commands that remain active for five seconds detach
+automatically and return a generated process session. The `process` tool can
+inspect current output, write or close stdin, or send `INT`, `TERM`, or `KILL`
+to that process group; it never waits for future output. Sessions use piped
+stdio rather than a pseudo-terminal. Completion wakes the agent automatically,
+so agents must not poll.
 
 ## Access modes
 
@@ -61,8 +62,8 @@ restarts the child process when either changes. The equivalent flags are
 `--sandbox-files <mode>` and `--sandbox-network <mode>`.
 
 Full mode removes pi-nono restrictions only for its selected axis. Selecting
-Full for both axes bypasses nono entirely; yielded sandbox process handles are
-then unavailable. Existing project and session grants remain stored and become
+Full for both axes bypasses nono entirely; automatic process detachment is then
+unavailable. Existing project and session grants remain stored and become
 active again when returning to sandboxed mode. Running processes retain the
 immutable mode and grants they started with.
 
@@ -100,7 +101,7 @@ rejected when the platform cannot safely enforce denied descendants.
 
 pi-nono generates an immutable, temporary nono profile from the active machine,
 project, and session policy for each command. It does not use persistent nono
-profiles from `~/.config/nono`. Yielded process sessions keep the policy
+profiles from `~/.config/nono`. Detached process sessions keep the policy
 captured when they start, deliver completion automatically, and never retry.
 
 - **Linux:** Landlock and nono enforce filesystem and network access. Bubblewrap

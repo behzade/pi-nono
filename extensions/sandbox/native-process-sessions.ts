@@ -43,7 +43,6 @@ interface NativeSession {
 	error?: string;
 	stopped: boolean;
 	detached: boolean;
-	observers: number;
 	listeners: Set<() => void>;
 	fiber: Fiber.Fiber<void, never>;
 }
@@ -63,7 +62,6 @@ export interface ContinueProcessSessionOptions {
 	input?: string;
 	closeStdin?: boolean;
 	signal?: "INT" | "TERM" | "KILL";
-	yieldMs?: number;
 }
 
 function processError(cause: unknown): Error {
@@ -124,7 +122,6 @@ export class NativeProcessSessions {
 			deliveredOutput: 0,
 			stopped: false,
 			detached: false,
-			observers: 0,
 			listeners: new Set<() => void>(),
 		} as NativeSession;
 
@@ -146,7 +143,7 @@ export class NativeProcessSessions {
 				Deferred.doneUnsafe(started, Effect.fail(error));
 			}
 			manager.#wake(session);
-			manager.#notifyIfUnobserved(session);
+			manager.#notifyIfDetached(session);
 		}).pipe(
 			Effect.onExit(() => Effect.sync(() => {
 				if (!Deferred.isDoneUnsafe(started)) {
@@ -169,10 +166,10 @@ export class NativeProcessSessions {
 		return Effect.runPromise(this.startEffect(options), signal ? { signal } : undefined);
 	}
 
-	async yield(id: string, yieldMs: number, signal?: AbortSignal): Promise<ProcessSessionSnapshot> {
+	async detachAfter(id: string, waitMs: number, signal?: AbortSignal): Promise<ProcessSessionSnapshot> {
 		const session = this.#require(id);
 		try {
-			await this.#wait(session, () => this.#state(session) !== "running", yieldMs, signal);
+			await this.#wait(session, () => this.#state(session) !== "running", waitMs, signal);
 		} catch (error) {
 			if (signal?.aborted && this.#state(session) === "running") {
 				session.stopped = true;
@@ -187,28 +184,13 @@ export class NativeProcessSessions {
 	async continue(
 		id: string,
 		options: ContinueProcessSessionOptions,
-		signal?: AbortSignal,
 	): Promise<ProcessSessionSnapshot> {
 		const session = this.#require(id);
 		if (this.#state(session) !== "running") return this.#snapshot(session, true);
-		session.observers += 1;
-		try {
-			const baseline = session.totalOutput;
-			if (options.input !== undefined) this.#client.writeStdin(`process/${id}`, Buffer.from(options.input));
-			if (options.closeStdin) this.#client.closeStdin(`process/${id}`);
-			if (options.signal) this.#client.signal(`process/${id}`, `SIG${options.signal}`);
-			if (session.deliveredOutput >= session.totalOutput) {
-				await this.#wait(
-					session,
-					() => session.totalOutput > baseline || this.#state(session) !== "running",
-					options.yieldMs,
-					signal,
-				);
-			}
-			return this.#snapshot(session, true);
-		} finally {
-			session.observers -= 1;
-		}
+		if (options.input !== undefined) this.#client.writeStdin(`process/${id}`, Buffer.from(options.input));
+		if (options.closeStdin) this.#client.closeStdin(`process/${id}`);
+		if (options.signal) this.#client.signal(`process/${id}`, `SIG${options.signal}`);
+		return this.#snapshot(session, true);
 	}
 
 	readonly shutdownEffect = Effect.fn("NativeProcessSessions.shutdown")(function* (this: NativeProcessSessions) {
@@ -267,8 +249,8 @@ export class NativeProcessSessions {
 		return "running";
 	}
 
-	#notifyIfUnobserved(session: NativeSession): void {
-		if (!session.detached || session.observers > 0) return;
+	#notifyIfDetached(session: NativeSession): void {
+		if (!session.detached) return;
 		try { this.#onSettled(this.#snapshot(session, false)); } catch { /* Notification cannot corrupt process state. */ }
 	}
 
@@ -279,14 +261,13 @@ export class NativeProcessSessions {
 	#wait(
 		session: NativeSession,
 		predicate: () => boolean,
-		yieldMs: number | undefined,
+		waitMs: number,
 		signal?: AbortSignal,
 	): Promise<void> {
 		if (predicate()) return Promise.resolve();
 		return new Promise((resolve, reject) => {
-			let timer: ReturnType<typeof setTimeout> | undefined;
 			const cleanup = () => {
-				if (timer) clearTimeout(timer);
+				clearTimeout(timer);
 				session.listeners.delete(check);
 				signal?.removeEventListener("abort", abort);
 			};
@@ -294,7 +275,7 @@ export class NativeProcessSessions {
 			const check = () => { if (predicate()) finish(); };
 			const abort = () => { cleanup(); reject(new Error("aborted")); };
 			session.listeners.add(check);
-			if (yieldMs !== undefined) timer = setTimeout(finish, yieldMs);
+			const timer = setTimeout(finish, waitMs);
 			if (signal?.aborted) abort();
 			else signal?.addEventListener("abort", abort, { once: true });
 		});
