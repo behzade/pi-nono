@@ -46,12 +46,15 @@ package and platform-specific npm tarballs.
 
 ## Long-running processes
 
-Sandboxed `bash` commands that remain active for five seconds detach
-automatically and return a generated process session. The `process` tool can
-inspect current output, write or close stdin, or send `INT`, `TERM`, or `KILL`
-to that process group; it never waits for future output. Sessions use piped
-stdio rather than a pseudo-terminal. Completion wakes the agent automatically,
-so agents must not poll.
+`bash` runs commands synchronously by default. Set `execution` to `async` and
+provide a short `label` when independent execution is intentional; the call
+then returns a process session. Async execution supports finite work such as a
+long test as well as persistent servers and watchers. At most three async
+processes may run at once, and duplicate commands in the same canonical working
+directory are rejected. The `process` tool can inspect current output, write or
+close stdin, or send `INT`, `TERM`, or `KILL`; it never waits for future output.
+Async processes use piped stdio rather than a pseudo-terminal. Completion wakes
+the agent automatically, so agents must not poll.
 
 ## Access modes
 
@@ -62,10 +65,10 @@ restarts the child process when either changes. The equivalent flags are
 `--sandbox-files <mode>` and `--sandbox-network <mode>`.
 
 Full mode removes pi-nono restrictions only for its selected axis. Selecting
-Full for both axes bypasses nono entirely; automatic process detachment is then
+Full for both axes bypasses nono entirely; async process handles are then
 unavailable. Existing project and session grants remain stored and become
-active again when returning to sandboxed mode. Running processes retain the
-immutable mode and grants they started with.
+active again when returning to sandboxed mode. Running async processes retain
+the immutable mode and grants they started with.
 
 ## Permissions
 

@@ -1,16 +1,10 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { BashParams, ProcessParams } from "./tool-schemas.ts";
+import { ProcessParams } from "./tool-schemas.ts";
 
 const accessRequestSource = readFileSync(new URL("./access-request.ts", import.meta.url), "utf8");
 const schemaSource = readFileSync(new URL("./tool-schemas.ts", import.meta.url), "utf8");
-
-test("bash does not expose automatic detachment timing", () => {
-	const schema = BashParams as { type?: unknown; properties?: Record<string, unknown> };
-	assert.equal(schema.type, "object");
-	assert.deepEqual(Object.keys(schema.properties ?? {}), ["command", "timeout"]);
-});
 
 test("process exposes only immediate control primitives", () => {
 	const schema = ProcessParams as { properties?: Record<string, unknown>; required?: string[] };

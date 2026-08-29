@@ -17,7 +17,6 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
 	formatProcessSnapshot,
-	modelVisibleProcessOutput,
 	notifyProcessSettlement,
 	processSessionDetails,
 } from "./process-sessions.ts";
@@ -95,8 +94,6 @@ function readGlobalConfig(): NativeSandboxConfig {
 function unavailableBashOps(reason: string): BashOperations {
 	return { async exec() { throw new Error(reason); } };
 }
-
-const AUTO_DETACH_MS = 5_000;
 
 function createCapturedLocalBash(
 	cwd: string,
@@ -188,9 +185,9 @@ export default function (pi: ExtensionAPI) {
 		...localBash,
 		label: "bash (OS sandbox)",
 		description:
-			"Execute one bash command with the active project and Pi-session sandbox policy. Sandboxed commands still running after five seconds detach automatically and wake the agent on completion. The call cannot declare rights and is never automatically retried. Use request_access separately after a denial.",
+			"Execute one bash command with the active project and Pi-session sandbox policy. Execution defaults to sync. Set execution to async to run independently and return a labeled process handle; at most three non-duplicate async processes may be active. The call cannot declare rights and is never automatically retried. Use request_access separately after a denial.",
 		promptSnippet:
-			"Run once under the active policy. Long sandboxed commands detach automatically and wake you on completion; never poll. On denial, request the smallest right and explicitly rerun later.",
+			"Run commands synchronously by default. Use execution=async only when independent execution is intentional. On denial, request the smallest right and explicitly rerun later.",
 		parameters: BashParams,
 		executionMode: "sequential",
 		renderShell: "self",
@@ -198,36 +195,43 @@ export default function (pi: ExtensionAPI) {
 			const commandPolicy = await sandbox.runPromise(
 				SandboxRuntime.use((runtime) => runtime.captureCommand),
 			);
-			if (commandPolicy.kind === "local") {
-				return createCapturedLocalBash(localCwd, commandPolicy.environment)
-					.execute(id, params, signal, onUpdate, ctx);
-			}
-			const sessionId = await commandPolicy.processSessions.start({
-				command: params.command,
-				cwd: ctx?.cwd ?? localCwd,
-				...(params.timeout === undefined ? {} : { timeout: params.timeout }),
-				config: commandPolicy.policy.config,
-				permissions: commandPolicy.policy.filesystem,
-				revalidatePermissions: commandPolicy.revalidatePermissions,
-				networkHosts: networkHosts(commandPolicy.policy),
-				localPorts: commandPolicy.policy.localPorts,
-			}, signal);
-			const snapshot = await commandPolicy.processSessions.detachAfter(sessionId, AUTO_DETACH_MS, signal);
-			if (snapshot.state === "running") {
+			if (params.execution === "async") {
+				if (commandPolicy.kind === "local") {
+					throw new Error("Async processes are unavailable while the sandbox is disabled");
+				}
+				const sessionId = await commandPolicy.processSessions.start({
+					command: params.command,
+					cwd: ctx?.cwd ?? localCwd,
+					...(params.timeout === undefined ? {} : { timeout: params.timeout }),
+					config: commandPolicy.policy.config,
+					permissions: commandPolicy.policy.filesystem,
+					revalidatePermissions: commandPolicy.revalidatePermissions,
+					networkHosts: networkHosts(commandPolicy.policy),
+					localPorts: commandPolicy.policy.localPorts,
+				}, signal);
+				const snapshot = commandPolicy.processSessions.detach(sessionId);
 				return {
 					content: [{ type: "text", text: formatProcessSnapshot(snapshot) }],
 					details: processSessionDetails(snapshot),
 				};
 			}
-			const output = modelVisibleProcessOutput(snapshot.output).trimEnd() || "(no output)";
-			if (snapshot.state === "failed") {
-				throw new Error(`${output}\n\nCommand failed: ${snapshot.error ?? "unknown error"}`);
+			if (commandPolicy.kind === "local") {
+				return createCapturedLocalBash(localCwd, commandPolicy.environment)
+					.execute(id, params, signal, onUpdate, ctx);
 			}
-			if (snapshot.state === "exited") {
-				throw new Error(`${output}\n\nCommand exited with code ${snapshot.exitCode ?? 1}`);
-			}
-			if (snapshot.state === "stopped") throw new Error(`${output}\n\nCommand aborted`);
-			return { content: [{ type: "text", text: output }], details: undefined };
+			const operations = createNativeSandboxOps(
+				commandPolicy.client,
+				commandPolicy.policy.config,
+				commandPolicy.policy.filesystem,
+				networkHosts(commandPolicy.policy),
+				commandPolicy.policy.localPorts,
+				id,
+				{
+					sourceEnvironment: commandPolicy.environment,
+					revalidatePermissions: commandPolicy.revalidatePermissions,
+				},
+			);
+			return createBashTool(localCwd, { operations }).execute(id, params, signal, onUpdate, ctx);
 		},
 	});
 

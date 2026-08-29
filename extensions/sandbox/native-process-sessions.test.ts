@@ -38,8 +38,8 @@ class FakeProcessClient {
 	}
 }
 
-const startOptions = () => ({
-	command: "long-command",
+const startOptions = (command = "long-command") => ({
+	command,
 	cwd: process.cwd(),
 	config: DEFAULT_CONFIG,
 	permissions: [],
@@ -57,7 +57,7 @@ test("detached processes preserve incremental output and interaction", async () 
 		assert.equal(client.request?.interactive, true);
 
 		client.emit("before\n");
-		assert.equal((await manager.detachAfter(id, 1)).output, "before\n");
+		assert.equal(manager.detach(id).output, "before\n");
 		client.emit("after\n");
 		const continued = await manager.continue(id, {
 			input: "answer\n",
@@ -75,31 +75,19 @@ test("detached processes preserve incremental output and interaction", async () 
 	}
 });
 
-test("only detached completion sends a notification", async () => {
-	const foregroundClient = new FakeProcessClient();
-	const foregroundNotifications: unknown[] = [];
-	const foreground = new NativeProcessSessions(foregroundClient, process.env, (value) => foregroundNotifications.push(value));
-	try {
-		const id = await foreground.start(startOptions());
-		foregroundClient.finish();
-		assert.equal((await foreground.detachAfter(id, 100)).state, "completed");
-		assert.deepEqual(foregroundNotifications, []);
-	} finally {
-		await foreground.shutdown();
-	}
-
-	const backgroundClient = new FakeProcessClient();
+test("detached completion sends a notification", async () => {
+	const client = new FakeProcessClient();
 	let notify!: (value: unknown) => void;
 	const notification = new Promise((resolve) => { notify = resolve; });
-	const background = new NativeProcessSessions(backgroundClient, process.env, notify);
+	const manager = new NativeProcessSessions(client, process.env, notify);
 	try {
-		const id = await background.start(startOptions());
-		await background.detachAfter(id, 1);
-		backgroundClient.emit("later\n");
-		backgroundClient.finish(7);
+		const id = await manager.start(startOptions());
+		manager.detach(id);
+		client.emit("later\n");
+		client.finish(7);
 		assert.deepEqual(await notification, { id, state: "exited", output: "later\n", exitCode: 7 });
 	} finally {
-		await background.shutdown();
+		await manager.shutdown();
 	}
 });
 
@@ -125,11 +113,25 @@ test("inspecting a detached process does not suppress its completion notificatio
 	const manager = new NativeProcessSessions(client, process.env, notify);
 	try {
 		const id = await manager.start(startOptions());
-		await manager.detachAfter(id, 1);
+		manager.detach(id);
 		assert.deepEqual(await manager.continue(id, {}), { id, state: "running", output: "" });
 		client.emit("final\n");
 		client.finish();
 		assert.deepEqual(await notification, { id, state: "completed", output: "final\n", exitCode: 0 });
+	} finally {
+		await manager.shutdown();
+	}
+});
+
+test("rejects duplicate async commands and more than three active processes", async () => {
+	const client = new FakeProcessClient();
+	const manager = new NativeProcessSessions(client, process.env);
+	try {
+		await manager.start(startOptions("async-one"));
+		await assert.rejects(manager.start(startOptions("async-one")), /duplicate active async command/);
+		await manager.start(startOptions("async-two"));
+		await manager.start(startOptions("async-three"));
+		await assert.rejects(manager.start(startOptions("async-four")), /active async process limit reached: 3/);
 	} finally {
 		await manager.shutdown();
 	}

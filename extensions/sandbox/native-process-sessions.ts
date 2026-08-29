@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { Cause, Deferred, Effect, Exit, Fiber, Scope } from "effect";
 import type { SandboxExecRequest, SandboxExecResult } from "./sandbox-protocol.ts";
 import {
@@ -11,6 +12,7 @@ import type { NativeSandboxConfig } from "./sandbox-config.ts";
 
 const MAX_RETAINED_BYTES = 2 * 1024 * 1024;
 const MAX_SESSIONS = 32;
+const MAX_ACTIVE_ASYNC_PROCESSES = 3;
 
 export type ProcessSessionState = "running" | "completed" | "exited" | "failed" | "stopped";
 
@@ -35,6 +37,8 @@ export interface ProcessSessionClient {
 
 interface NativeSession {
 	id: string;
+	command: string;
+	cwd: string;
 	output: Buffer;
 	outputStart: number;
 	totalOutput: number;
@@ -43,7 +47,6 @@ interface NativeSession {
 	error?: string;
 	stopped: boolean;
 	detached: boolean;
-	listeners: Set<() => void>;
 	fiber: Fiber.Fiber<void, never>;
 }
 
@@ -95,6 +98,19 @@ export class NativeProcessSessions {
 		if (this.#sessions.size >= MAX_SESSIONS) {
 			return yield* Effect.fail(new Error(`process session limit reached: ${MAX_SESSIONS}`));
 		}
+		const cwd = yield* Effect.try({
+			try: () => realpathSync(options.cwd),
+			catch: processError,
+		});
+		const active = Array.from(this.#sessions.values()).filter((session) =>
+			this.#state(session) === "running"
+		);
+		if (active.length >= MAX_ACTIVE_ASYNC_PROCESSES) {
+			return yield* Effect.fail(new Error(`active async process limit reached: ${MAX_ACTIVE_ASYNC_PROCESSES}`));
+		}
+		if (active.some((session) => session.cwd === cwd && session.command === options.command)) {
+			return yield* Effect.fail(new Error("duplicate active async command in this working directory"));
+		}
 
 		const manager = this;
 		const id = `pi-${randomUUID()}`;
@@ -102,7 +118,7 @@ export class NativeProcessSessions {
 			try: () => buildSandboxExecRequest(
 				`process/${id}`,
 				options.command,
-				options.cwd,
+				cwd,
 				options.timeout,
 				options.config,
 				options.revalidatePermissions?.() ?? options.permissions,
@@ -116,13 +132,14 @@ export class NativeProcessSessions {
 		const started = yield* Deferred.make<void, Error>();
 		const session = {
 			id,
+			command: options.command,
+			cwd,
 			output: Buffer.alloc(0),
 			outputStart: 0,
 			totalOutput: 0,
 			deliveredOutput: 0,
 			stopped: false,
 			detached: false,
-			listeners: new Set<() => void>(),
 		} as NativeSession;
 
 		const run = Effect.gen(function* () {
@@ -142,7 +159,6 @@ export class NativeProcessSessions {
 				session.error = error.message;
 				Deferred.doneUnsafe(started, Effect.fail(error));
 			}
-			manager.#wake(session);
 			manager.#notifyIfDetached(session);
 		}).pipe(
 			Effect.onExit(() => Effect.sync(() => {
@@ -166,17 +182,8 @@ export class NativeProcessSessions {
 		return Effect.runPromise(this.startEffect(options), signal ? { signal } : undefined);
 	}
 
-	async detachAfter(id: string, waitMs: number, signal?: AbortSignal): Promise<ProcessSessionSnapshot> {
+	detach(id: string): ProcessSessionSnapshot {
 		const session = this.#require(id);
-		try {
-			await this.#wait(session, () => this.#state(session) !== "running", waitMs, signal);
-		} catch (error) {
-			if (signal?.aborted && this.#state(session) === "running") {
-				session.stopped = true;
-				await Effect.runPromise(Fiber.interrupt(session.fiber));
-			}
-			throw error;
-		}
 		if (this.#state(session) === "running") session.detached = true;
 		return this.#snapshot(session, true);
 	}
@@ -220,7 +227,6 @@ export class NativeProcessSessions {
 			session.output = session.output.subarray(dropped);
 			session.outputStart += dropped;
 		}
-		this.#wake(session);
 	}
 
 	#snapshot(session: NativeSession, consume: boolean): ProcessSessionSnapshot {
@@ -252,33 +258,6 @@ export class NativeProcessSessions {
 	#notifyIfDetached(session: NativeSession): void {
 		if (!session.detached) return;
 		try { this.#onSettled(this.#snapshot(session, false)); } catch { /* Notification cannot corrupt process state. */ }
-	}
-
-	#wake(session: NativeSession): void {
-		for (const listener of [...session.listeners]) listener();
-	}
-
-	#wait(
-		session: NativeSession,
-		predicate: () => boolean,
-		waitMs: number,
-		signal?: AbortSignal,
-	): Promise<void> {
-		if (predicate()) return Promise.resolve();
-		return new Promise((resolve, reject) => {
-			const cleanup = () => {
-				clearTimeout(timer);
-				session.listeners.delete(check);
-				signal?.removeEventListener("abort", abort);
-			};
-			const finish = () => { cleanup(); resolve(); };
-			const check = () => { if (predicate()) finish(); };
-			const abort = () => { cleanup(); reject(new Error("aborted")); };
-			session.listeners.add(check);
-			const timer = setTimeout(finish, waitMs);
-			if (signal?.aborted) abort();
-			else signal?.addEventListener("abort", abort, { once: true });
-		});
 	}
 
 	#pruneSettled(): void {

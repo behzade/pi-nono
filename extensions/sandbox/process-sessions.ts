@@ -53,7 +53,9 @@ interface ProcessCompletionMessenger {
 			display: false;
 			details: Omit<ProcessSessionSnapshot, "output">;
 		},
-		options: { triggerTurn: true; deliverAs: "followUp" },
+		options:
+			| { triggerTurn: false; deliverAs: "steer" }
+			| { triggerTurn: true; deliverAs: "followUp" },
 	): void;
 }
 
@@ -65,10 +67,17 @@ export function notifyProcessSettlement(
 	messenger: ProcessCompletionMessenger,
 	settlement: ProcessSessionSnapshot,
 ): void {
+	const details = processSessionDetails(settlement);
+	messenger.sendMessage({
+		customType: "process-session-status",
+		content: "",
+		display: false,
+		details,
+	}, { triggerTurn: false, deliverAs: "steer" });
 	messenger.sendMessage({
 		customType: "process-session-result",
 		content: processCompletionReprompt(settlement),
 		display: false,
-		details: processSessionDetails(settlement),
+		details,
 	}, { triggerTurn: true, deliverAs: "followUp" });
 }

@@ -38,17 +38,36 @@ export const RequestAccessParams = Type.Object(
 	{ additionalProperties: false },
 );
 
-export const BashParams = Type.Object(
-	{
-		command: Type.String({ description: "Bash command to execute" }),
-		timeout: Type.Optional(Type.Number({
-			description: "Hard timeout in seconds (optional, no default timeout)",
-			exclusiveMinimum: 0,
-			maximum: 86_400,
-		})),
-	},
-	{ additionalProperties: false },
-);
+const BashCommand = Type.String({ description: "Bash command to execute" });
+const BashTimeout = Type.Optional(Type.Number({
+	description: "Hard timeout in seconds (optional, no default timeout)",
+	exclusiveMinimum: 0,
+	maximum: 86_400,
+}));
+
+export const BashParams = Type.Union([
+	Type.Object(
+		{
+			command: BashCommand,
+			timeout: BashTimeout,
+			execution: Type.Optional(Type.Literal("sync", {
+				description: "Wait for the command to finish (default)",
+			})),
+		},
+		{ additionalProperties: false },
+	),
+	Type.Object(
+		{
+			command: BashCommand,
+			timeout: BashTimeout,
+			execution: Type.Literal("async", {
+				description: "Run independently and return a process handle",
+			}),
+			label: Type.String({ description: "Short sidebar label for the async process", minLength: 1, maxLength: 80 }),
+		},
+		{ additionalProperties: false },
+	),
+]);
 
 export const ProcessParams = Type.Object(
 	{
