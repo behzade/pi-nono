@@ -17,6 +17,20 @@ interface RegisteredTool {
 	): Promise<{ content: Array<{ text?: string }> }>;
 }
 
+test("PI_NONO_DISABLED skips all extension setup", () => {
+	const original = process.env.PI_NONO_DISABLED;
+	try {
+		process.env.PI_NONO_DISABLED = "1";
+		const pi = new Proxy({}, {
+			get() { throw new Error("disabled extension accessed Pi"); },
+		}) as ExtensionAPI;
+		registerSandbox(pi);
+	} finally {
+		if (original === undefined) delete process.env.PI_NONO_DISABLED;
+		else process.env.PI_NONO_DISABLED = original;
+	}
+});
+
 test("disabled sandbox does not intercept built-in file tools", async () => {
 	let sessionStart: ((event: unknown, context: unknown) => Promise<unknown>) | undefined;
 	let toolCall: ((event: unknown, context: unknown) => Promise<unknown>) | undefined;

@@ -109,6 +109,8 @@ function createCapturedLocalBash(
 }
 
 export default function (pi: ExtensionAPI) {
+	if (process.env.PI_NONO_DISABLED === "1") return;
+
 	pi.registerFlag("no-sandbox", {
 		description: "Disable OS-level sandboxing for bash commands",
 		type: "boolean",

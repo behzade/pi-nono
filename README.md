@@ -70,6 +70,10 @@ unavailable. Existing project and session grants remain stored and become
 active again when returning to sandboxed mode. Running async processes retain
 the immutable mode and grants they started with.
 
+Hosts that provide their own complete sandbox can set `PI_NONO_DISABLED=1`.
+The extension then returns before registering flags, tools, commands, hooks, or
+approval state, leaving Pi's built-in tools for the host sandbox to constrain.
+
 ## Permissions
 
 When a task needs more access, pi-nono shows the exact capability and lets the
