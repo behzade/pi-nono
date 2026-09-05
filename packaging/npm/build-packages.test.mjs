@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 import test from "node:test";
 
 const repositoryRoot = resolve(import.meta.dirname, "../..");
+const { version } = JSON.parse(readFileSync(join(repositoryRoot, "extensions/sandbox/package.json"), "utf8"));
 
 test("stages a publishable main package with exact optional native packages", () => {
 	const outputRoot = mkdtempSync(join(tmpdir(), "guardian-npm-test-"));
@@ -22,8 +23,8 @@ test("stages a publishable main package with exact optional native packages", ()
 		assert.deepEqual(manifest.scripts, {});
 		assert.equal(manifest.devDependencies, undefined);
 		assert.deepEqual(manifest.optionalDependencies, {
-			"pi-nono-darwin-arm64": "3.0.0",
-			"pi-nono-linux-x64": "3.0.0",
+			"pi-nono-darwin-arm64": version,
+			"pi-nono-linux-x64": version,
 		});
 		assert.deepEqual(manifest.publishConfig, { access: "public", tag: "next" });
 		const names = readdirSync(packageRoot);
