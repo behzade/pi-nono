@@ -1,7 +1,7 @@
 {
 	"name": "pi-nono",
 	"private": true,
-	"version": "3.0.0",
+	"version": "3.0.1",
 	"description": "nono sandboxing and explicit permissions for the Pi coding agent",
 	"type": "module",
 	"license": "MIT",
@@ -16,11 +16,19 @@
 	},
 	"bugs": "https://github.com/behzade/pi-nono/issues",
 	"homepage": "https://github.com/behzade/pi-nono#readme",
-	"keywords": ["pi-package", "pi-extension", "sandbox", "nono"],
+	"keywords": [
+		"pi-package",
+		"pi-extension",
+		"sandbox",
+		"nono"
+	],
 	"engines": {
 		"node": ">=22.19.0"
 	},
-	"os": ["darwin", "linux"],
+	"os": [
+		"darwin",
+		"linux"
+	],
 	"files": [
 		"*.ts",
 		"!*.test.ts",
