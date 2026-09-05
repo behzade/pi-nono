@@ -4,6 +4,7 @@ import { Effect } from "effect";
 import type { SandboxExecRequest, SandboxExecResult } from "./sandbox-protocol.ts";
 import { DEFAULT_CONFIG } from "./sandbox-config.ts";
 import { NativeProcessSessions } from "./native-process-sessions.ts";
+import { ProcessCompletionQueue } from "./process-sessions.ts";
 
 class FakeProcessClient {
 	request?: SandboxExecRequest;
@@ -119,6 +120,35 @@ test("inspecting a detached process does not suppress its completion notificatio
 		client.finish();
 		assert.deepEqual(await notification, { id, state: "completed", output: "final\n", exitCode: 0 });
 	} finally {
+		await manager.shutdown();
+	}
+});
+
+test("reading a settled process acknowledges its queued result but retains the UI status", async () => {
+	const client = new FakeProcessClient();
+	const messages: string[] = [];
+	const queue = new ProcessCompletionQueue({
+		sendMessage: (message) => { messages.push(message.customType); },
+	}, () => false);
+	let notify!: () => void;
+	const settled = new Promise<void>((resolve) => { notify = resolve; });
+	const manager = new NativeProcessSessions(client, process.env, (snapshot) => {
+		queue.settle(snapshot);
+		notify();
+	});
+	try {
+		const id = await manager.start(startOptions());
+		manager.detach(id);
+		client.emit("final output\n");
+		client.finish();
+		await settled;
+		const snapshot = await manager.continue(id, {});
+		assert.equal(snapshot.output, "final output\n");
+		queue.acknowledge(snapshot);
+		queue.flush();
+		assert.deepEqual(messages, ["process-session-status"]);
+	} finally {
+		queue.close();
 		await manager.shutdown();
 	}
 });

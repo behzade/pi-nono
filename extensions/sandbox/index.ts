@@ -17,7 +17,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
 	formatProcessSnapshot,
-	notifyProcessSettlement,
+	ProcessCompletionQueue,
 	processSessionDetails,
 } from "./process-sessions.ts";
 import { registerAccessRequest } from "./access-request.ts";
@@ -129,11 +129,15 @@ export default function (pi: ExtensionAPI) {
 
 	const localCwd = process.cwd();
 	const localBash = createBashTool(localCwd);
+	let approvalContext: ExtensionContext | undefined;
+	const completions = new ProcessCompletionQueue(pi, () => approvalContext?.isIdle() ?? false);
 	const sandbox = ManagedRuntime.make(sandboxRuntimeLayer({
-		onProcessSettled: (settlement) => notifyProcessSettlement(pi, settlement),
+		onProcessSettled: (settlement) => completions.settle(settlement),
 	}));
 	let userBashCounter = 0;
-	let approvalContext: ExtensionContext | undefined;
+
+	pi.on("turn_end", () => completions.flush());
+	pi.on("agent_settled", () => completions.scheduleIdleDelivery());
 
 	const activeAccess = () => sandbox.runSync(
 		SandboxRuntime.use((runtime) => runtime.activeAccess),
@@ -173,6 +177,7 @@ export default function (pi: ExtensionAPI) {
 					...(params.close_stdin === undefined ? {} : { closeStdin: params.close_stdin }),
 					...(params.signal === undefined ? {} : { signal: params.signal }),
 				});
+				completions.acknowledge(snapshot);
 				return {
 					content: [{ type: "text", text: formatProcessSnapshot(snapshot) }],
 					details: processSessionDetails(snapshot),
@@ -212,6 +217,7 @@ export default function (pi: ExtensionAPI) {
 					localPorts: commandPolicy.policy.localPorts,
 				}, signal);
 				const snapshot = commandPolicy.processSessions.detach(sessionId);
+				completions.acknowledge(snapshot);
 				return {
 					content: [{ type: "text", text: formatProcessSnapshot(snapshot) }],
 					details: processSessionDetails(snapshot),
@@ -380,6 +386,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async () => {
+		completions.close();
 		if (approvalContext) unregisterApprovalSession(approvalContext);
 		approvalContext = undefined;
 		await sandbox.dispose();

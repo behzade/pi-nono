@@ -53,8 +53,13 @@ long test as well as persistent servers and watchers. At most three async
 processes may run at once, and duplicate commands in the same canonical working
 directory are rejected. The `process` tool can inspect current output, write or
 close stdin, or send `INT`, `TERM`, or `KILL`; it never waits for future output.
-Async processes use piped stdio rather than a pseudo-terminal. Completion wakes
-the agent automatically, so agents must not poll.
+Async processes use piped stdio rather than a pseudo-terminal. UI status updates
+arrive immediately. Unconsumed completions are batched at the next tool-turn
+boundary, or after a short coalescing window while idle, and wake the agent once
+per batch. A batch never waits for still-running processes. Reading a finished
+process through `process` acknowledges its pending completion; reading a running
+process does not suppress its eventual result. Completion messages contain
+results without requiring a user-visible reply. Agents must not poll.
 
 ## Access modes
 
