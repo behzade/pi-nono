@@ -73,13 +73,26 @@ configuration to the publish job.
 Restrict creation of `v*` tags to release maintainers: pushing one authorizes
 public publication through the configured trusted publishers.
 
-Set the version in `extensions/sandbox/package.json` and its lockfile, commit
-and push the release changes, then push the matching tag:
+## Create a release
+
+Start with a clean working tree and matching versions in the package manifest
+and lockfile. Commit your implementation changes first, then run one of:
 
 ```sh
-git tag v3.0.0
-git push origin v3.0.0
+make release BUMP=patch  # 3.2.4 -> 3.2.5 (default)
+make release BUMP=minor  # 3.2.4 -> 3.3.0
+make release BUMP=major  # 3.2.4 -> 4.0.0
 ```
+
+The command updates `extensions/sandbox/package.json` and both root-package
+version fields in `extensions/sandbox/package-lock.json`, commits those two
+files, and creates an annotated `v<VERSION>` tag on the new commit. Dependency
+versions are unchanged. Dirty trees, detached HEADs, in-progress Git operations,
+mismatched manifests, and existing local tags are rejected before editing.
+
+It does **not** push or publish. Review the commit and tag, then run the printed
+`git push --atomic origin HEAD v<VERSION>` command to trigger npm publication.
+No dependency installation or network access is needed to create the release.
 
 The tag must match the manifest version exactly. Choose a version that has not
 already been published; npm package versions are immutable. Publication is not
