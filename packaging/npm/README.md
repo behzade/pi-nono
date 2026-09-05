@@ -10,11 +10,15 @@ This updates both manifests, commits them, and creates an annotated version
 tag. It refuses existing tags and does not push. Review the result, then run
 the printed `git push --atomic origin HEAD v<VERSION>` command.
 
-Tag pushes build and test all three packages, publish the native packages
-before `pi-nono` under the `next` dist-tag, and create a GitHub prerelease.
-PRs and manual workflow runs never publish. npm versions are immutable; inspect
-any partial publication before retrying, since published versions cannot be
-republished.
+Tag pushes build and test all three packages, stage them on npm under `next`,
+and create a **draft** GitHub prerelease. PRs and manual workflow runs only test
+and build.
+
+Review the **Staged Packages** on npmjs.com and approve with 2FA: both native
+packages first, then `pi-nono`. CLI users can use `npm stage list <package>` and
+`npm stage approve <stage-id>` (npm >= 11.15.0). Once all three are live, publish
+the GitHub release draft. Inspect partial staging before retrying: staged and
+published versions both reserve the package version.
 
 ## One-time npm setup
 
@@ -24,7 +28,7 @@ Configure GitHub Actions Trusted Publishing separately for `pi-nono`,
 - **Owner / repository:** this GitHub repository.
 - **Workflow filename:** `npm-packages.yml`.
 - **Environment:** leave blank.
-- Allow direct `npm publish` if npm shows an allowed-actions setting.
+- **Permission:** `npm stage publish`; direct `npm publish` is not needed.
 
 New packages need an initial manual publication before trusted publishers can
 be configured. The workflow uses OIDC; no npm token secret is required.

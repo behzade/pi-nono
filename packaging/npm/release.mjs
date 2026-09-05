@@ -63,7 +63,7 @@ export function release(root, bump) {
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
 	try {
 		const tag = release(resolve(dirname(fileURLToPath(import.meta.url)), "../.."), process.argv[2]);
-		console.log(`Created release commit and ${tag}. Nothing has been pushed.\nPublish with: git push --atomic origin HEAD ${tag}`);
+		console.log(`Created release commit and ${tag}. Nothing has been pushed.\nStage packages with: git push --atomic origin HEAD ${tag}`);
 	} catch (error) {
 		console.error(error instanceof Error ? error.message : String(error));
 		process.exitCode = 1;
