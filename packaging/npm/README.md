@@ -43,7 +43,7 @@ node packaging/npm/build-packages.mjs native \
 # Use --platform linux --arch x64 for Linux.
 ```
 
-Native inputs must be official nono v0.61.1 artifacts. Packaging validates
+Native inputs must be official nono v0.75.0 artifacts. Packaging validates
 version, architecture, checksum, and portable linkage; symlinks and Nix-store
 runtime dependencies are rejected. Linux requires OS-installed Bubblewrap.
 See the [workflow](../../.github/workflows/npm-packages.yml) for pinned downloads

@@ -51,12 +51,12 @@ jobs:
           node-version: 22.19.0
       - run: |
           mkdir -p dist/download dist/extract dist/tarballs
-          curl -fsSLo dist/download/nono.tar.gz https://github.com/nolabs-ai/nono/releases/download/v0.61.1/nono-v0.61.1-aarch64-apple-darwin.tar.gz
-          echo '922d0d4f86720b34d1d1e8a0f141c7a883d98ac20749869545ecd3412a07a1f9  dist/download/nono.tar.gz' | shasum -a 256 -c
+          curl -fsSLo dist/download/nono.tar.gz https://github.com/nolabs-ai/nono/releases/download/v0.75.0/nono-v0.75.0-aarch64-apple-darwin.tar.gz
+          echo '7f33f113b193900600b54951c306137ad7e04346adebaa14283c752b7673c7d0  dist/download/nono.tar.gz' | shasum -a 256 -c
           tar -xzf dist/download/nono.tar.gz -C dist/extract
           nono=$(find "$PWD/dist/extract" -type f -name nono -perm -111 -print -quit)
           test -n "$nono"
-          curl -fsSLo dist/download/NONO-LICENSE https://raw.githubusercontent.com/nolabs-ai/nono/v0.61.1/LICENSE
+          curl -fsSLo dist/download/NONO-LICENSE https://raw.githubusercontent.com/nolabs-ai/nono/v0.75.0/LICENSE
           node packaging/npm/build-packages.mjs native \
             --platform darwin --arch arm64 --out "$PWD/dist/npm" \
             --nono "$nono" --nono-license "$PWD/dist/download/NONO-LICENSE"
@@ -88,12 +88,12 @@ jobs:
           node-version: 22.19.0
       - run: |
           mkdir -p dist/download dist/extract dist/tarballs
-          curl -fsSLo dist/download/nono.tar.gz https://github.com/nolabs-ai/nono/releases/download/v0.61.1/nono-v0.61.1-x86_64-unknown-linux-gnu.tar.gz
-          echo '9186323e1deda74bda886ab57ae3cff820bc85861a9dd691b898a4d309bffa93  dist/download/nono.tar.gz' | sha256sum -c
+          curl -fsSLo dist/download/nono.tar.gz https://github.com/nolabs-ai/nono/releases/download/v0.75.0/nono-v0.75.0-x86_64-unknown-linux-gnu.tar.gz
+          echo '2f883269824d85f96a75fb8788f6c31619e60d2c0865e93402d2f347461054fa  dist/download/nono.tar.gz' | sha256sum -c
           tar -xzf dist/download/nono.tar.gz -C dist/extract
           nono=$(find "$PWD/dist/extract" -type f -name nono -perm -111 -print -quit)
           test -n "$nono"
-          curl -fsSLo dist/download/NONO-LICENSE https://raw.githubusercontent.com/nolabs-ai/nono/v0.61.1/LICENSE
+          curl -fsSLo dist/download/NONO-LICENSE https://raw.githubusercontent.com/nolabs-ai/nono/v0.75.0/LICENSE
           sudo apt-get update
           sudo apt-get install -y bubblewrap
           command -v bwrap

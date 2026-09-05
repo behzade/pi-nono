@@ -18,11 +18,13 @@
         system:
         let
           pkgs = import nixpkgs { inherit system; };
+          nono = pkgs.callPackage ./nix/nono.nix { };
           piNono = pkgs.callPackage ./nix/pi-nono.nix {
-            nono = pkgs.nono;
+            inherit nono;
           };
         in
         {
+          inherit nono;
           pi-nono = piNono;
           default = piNono;
         }

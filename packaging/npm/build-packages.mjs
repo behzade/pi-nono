@@ -69,7 +69,7 @@ function buildNative(options) {
 	const selected = nativePackages[`${platform}:${arch}`];
 	if (!selected) fail(`unsupported native package target: ${platform}/${arch}`);
 	const outputRoot = requiredAbsolute(options, "out");
-	const nono = verifiedBinary(requiredAbsolute(options, "nono"), "nono", "0.61.1", selected.format);
+	const nono = verifiedBinary(requiredAbsolute(options, "nono"), "nono", "0.75.0", selected.format);
 	const nonoLicense = verifiedFile(requiredAbsolute(options, "nono-license"), "nono license");
 	verifyPortableLinkage(nono.path, selected.os);
 
@@ -92,7 +92,7 @@ function buildNative(options) {
 		publishConfig: { access: "public", tag: "next" },
 		scripts: {},
 		piNono: {
-			nono: { version: "0.61.1", sha256: nono.sha256, path: "bin/nono" },
+			nono: { version: "0.75.0", sha256: nono.sha256, path: "bin/nono" },
 		},
 	});
 	process.stdout.write(`${output}\n`);
